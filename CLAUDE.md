@@ -28,6 +28,10 @@ Controls a Creative SoundBlaster X G6 over USB (HID + USB Audio Control). Layout
 
 ## Open items
 
+Full feature checklist: doc/parity.md. Reverse-engineering helper: `python -m g6_cli.g6_probe` (snapshot only
+replays reviewed read queries; never add guessed command bytes).
+
+
 - Speaker layout (stereo/5.1/7.1): no readback known.
 - Decoder mode and DAC filter read back as 0 while Direct mode is on. Unconfirmed whether that means "not
   applicable"; capture with Direct mode off to check.

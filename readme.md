@@ -105,6 +105,8 @@ src/g6_cli/
   g6_spec/         packet builders (pure, no I/O)
   g6_core.py       USB/HID transport (pyusb + hidapi)
   g6_status.py     status queries + response parsers
+  g6_capture.py    pcapng/USBPcap reader -> protocol events
+  g6_probe.py      g6-probe: capture -> queries -> snapshot -> diff (reverse-engineering helper)
   gui/
     controls.py    declarative tables of GUI controls -> CLI flags
     runner.py      runs CLI commands (+ Linux driver unload/reload), no UI code
@@ -121,6 +123,8 @@ python -m pytest -m hardware tests/hardware_test.py   # read-only checks against
 
 `tests/g6_cli/g6_api/api_real_test.py` is also marked `hardware`. It claims the interface and reloads ALSA, so run it
 by hand only.
+
+Parity with SoundBlaster Command, and the capture/snapshot/diff workflow: [doc/parity.md](doc/parity.md).
 
 Adding a feature: capture it in Wireshark → add a builder in `g6_spec/` → an `G6Api` method → a CLI flag → a row in
 `gui/controls.py` (the controls test checks the flag exists) → tests. For readback, add a query and parser to

@@ -30,6 +30,7 @@ test = ["pytest>=8"]
 [project.scripts]
 soundblaster-x-g6-cli = "g6_cli:cli_entry"
 g6 = "g6_cli:cli_entry"
+g6-probe = "g6_cli.g6_probe:cli_entry"
 
 [project.gui-scripts]
 soundblaster-x-g6-gui = "g6_cli.gui:main"
