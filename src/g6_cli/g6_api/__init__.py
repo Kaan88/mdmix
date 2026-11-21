@@ -12,6 +12,7 @@ from g6_cli.g6_spec.decoder import decoder_mode as decoder_mode_spec
 from g6_cli.g6_spec.lighting import (
     lighting_disable as lighting_disable_spec,
     lighting_enable_set_rgb as lighting_enable_set_rgb_spec,
+    lighting_volume_ring as lighting_volume_ring_spec,
 )
 from g6_cli.g6_spec.mixer import (
     monitoring_external_mic_mute as monitoring_external_mic_mute_spec,
@@ -258,6 +259,13 @@ class G6Api:
         self.__device.send_hid_data_to_device(hid_data_list=hid_data_list)
 
     def lighting_enable_set_rgb_available(self) -> bool:
+        return self.__device.is_hid_interface_available()
+
+    def lighting_volume_ring(self, enable: bool) -> None:
+        hid_data_list = lighting_volume_ring_spec(enable=enable)
+        self.__device.send_hid_data_to_device(hid_data_list=hid_data_list)
+
+    def lighting_volume_ring_available(self) -> bool:
         return self.__device.is_hid_interface_available()
 
     # --- Mixer ---

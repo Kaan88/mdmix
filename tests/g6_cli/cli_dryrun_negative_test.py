@@ -120,7 +120,8 @@ def test_cli_invalid_arguments_raise_argparse_error_in_dry_run(
     assert exit_info.value.code == 2
 
     captured = capsys.readouterr()
-    assert expected_error_snippet in captured.err, (
+    # Python >= 3.12.8 quotes argparse choices; compare without quotes so both formats pass
+    assert expected_error_snippet.replace("'", "") in captured.err.replace("'", ""), (
         f"Expected error snippet '{expected_error_snippet}' not found in stderr.\n"
         f"Actual stderr:\n{captured.err}"
     )

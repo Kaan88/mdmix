@@ -4,6 +4,9 @@ import pytest
 
 import g6_cli.g6_api as g6_api
 
+# Claims the USB interface and reloads ALSA: never part of the default run.
+pytestmark = pytest.mark.hardware
+
 
 @pytest.fixture(scope="session")
 def api() -> g6_api.G6Api:

@@ -1,5 +1,7 @@
 import argparse
+import json
 import os.path
+import sys
 import tempfile
 
 from g6_cli.g6_api import G6Api
@@ -12,9 +14,10 @@ from g6_cli.g6_spec import (
 )
 from g6_cli.g6_spec.decoder import DecoderMode
 from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
+from g6_cli.g6_status import DAC_FILTER_LABELS, DeviceStatus, read_status
 from g6_cli.g6_util import to_bool
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 # The name of the temporary file to remember the last toggle state in. If the file could not be found. The program
 # lets the G6 to toggle to Speakers by default.
@@ -48,7 +51,23 @@ def _decoder_mode_from_cli(value: str) -> DecoderMode:
     return DecoderMode[value.upper()]
 
 
-def parse_cli_args():
+# Arguments that only modify how an action is executed; they are not an action on their own.
+_NON_ACTION_ARGS = {'dry_run', 'debug', 'json', 'reload_audio_services_no_sudo'}
+
+
+def has_action(args: argparse.Namespace) -> bool:
+    """
+    :return: True if at least one argument requests something to be done (a device change, status, reload, ...).
+    """
+    for name, value in vars(args).items():
+        if name in _NON_ACTION_ARGS or name.endswith('_channels'):
+            continue
+        if value is not None and value is not False:
+            return True
+    return False
+
+
+def parse_cli_args(argv: list[str] | None = None):
     """
     Parse the CLI arguments using argparse.
     Prints the CLI help to console and raises an error if the arguments are invalid.
@@ -80,7 +99,13 @@ def parse_cli_args():
     general_options_group.add_argument('--reload-audio-services', required=False, action='store_true',
                                        help='Reload ALSA and restart user PipeWire services.')
     general_options_group.add_argument('--reload-audio-services-no-sudo', required=False, action='store_true',
-                                       help='Reload audio services, but do not use sudo for ALSA reload.')
+                                       help='Reload audio services, but do not use sudo for ALSA reload'
+                                            ' (implies --reload-audio-services).')
+    general_options_group.add_argument('--status', required=False, action='store_true',
+                                       help='Read the current device state over HID (read-only) and print it.'
+                                            ' Runs before any other requested change.')
+    general_options_group.add_argument('--json', required=False, action='store_true',
+                                       help='With --status: print the state as JSON.')
 
     #
     # Playback [HID / Audio]
@@ -153,6 +178,9 @@ def parse_cli_args():
     lighting_hid_group.add_argument('--lighting-rgb', required=False, type=int, nargs=3,
                                     metavar=('{0..255}', '{0..255}', '{0..255}'),
                                     help='Enable lighting and set RGB.')
+    lighting_hid_group.add_argument('--lighting-volume-ring', required=False,
+                                    choices=['Enabled', 'Disabled'],
+                                    help='Enable or disable the volume ring light (bright LED under the volume knob).')
 
     #
     # Mixer [Audio]
@@ -363,68 +391,17 @@ def parse_cli_args():
                                help='Set the value for the Dialog-Plus sound effect as integer.')
 
     # parse args and verify
-    args = parser.parse_args()
-    if args.toggle_output is False \
-            and args.set_output is None \
-            and args.claim_and_release is False \
-            and args.reload_audio_services is False \
-            and args.playback_mute is None \
-            and args.playback_volume is None \
-            and args.playback_speakers_to_stereo is False \
-            and args.playback_speakers_to_5_1 is False \
-            and args.playback_speakers_to_7_1 is False \
-            and args.playback_headphones_to_stereo is False \
-            and args.playback_headphones_to_5_1 is False \
-            and args.playback_headphones_to_7_1 is False \
-            and args.playback_direct_mode is None \
-            and args.playback_spdif_out_direct_mode is None \
-            and args.playback_filter is None \
-            and args.decoder_mode is None \
-            and args.lighting_disable is False \
-            and args.lighting_rgb is None \
-            and args.mixer_playback_mute is None \
-            and args.mixer_monitoring_line_in_mute is None \
-            and args.mixer_monitoring_line_in_volume is None \
-            and args.mixer_monitoring_external_mic_mute is None \
-            and args.mixer_monitoring_external_mic_volume is None \
-            and args.mixer_monitoring_spdif_in_mute is None \
-            and args.mixer_monitoring_spdif_in_volume is None \
-            and args.mixer_recording_line_in_mute is None \
-            and args.mixer_recording_line_in_volume is None \
-            and args.mixer_recording_external_mic_mute is None \
-            and args.mixer_recording_external_mic_volume is None \
-            and args.mixer_recording_spdif_in_mute is None \
-            and args.mixer_recording_spdif_in_volume is None \
-            and args.mixer_recording_what_u_hear_mute is None \
-            and args.mixer_recording_what_u_hear_volume is None \
-            and args.recording_mute is None \
-            and args.recording_mic_recording_volume is None \
-            and args.recording_mic_boost_db is None \
-            and args.recording_mic_monitoring_mute is None \
-            and args.recording_mic_monitoring_volume is None \
-            and args.recording_voice_clarity is None \
-            and args.recording_voice_clarity_noise_reduction is None \
-            and args.recording_voice_clarity_aec is None \
-            and args.recording_voice_clarity_smart_volume is None \
-            and args.recording_voice_clarity_mic_eq is None \
-            and args.recording_voice_clarity_mic_eq_preset is None \
-            and args.sbx_surround is None \
-            and args.sbx_surround_value is None \
-            and args.sbx_crystalizer is None \
-            and args.sbx_crystalizer_value is None \
-            and args.sbx_bass is None \
-            and args.sbx_bass_value is None \
-            and args.sbx_smart_volume is None \
-            and args.sbx_smart_volume_value is None \
-            and args.sbx_smart_volume_special_value is None \
-            and args.sbx_dialog_plus is None \
-            and args.sbx_dialog_plus_value is None:
+    args = parser.parse_args(argv)
+    if args.reload_audio_services_no_sudo:
+        args.reload_audio_services = True
+
+    if not has_action(args):
         message = 'No meaningful argument has been specified!'
         print(message)
         parser.print_help()
         raise ValueError(message)
     elif args.toggle_output is True and args.set_output is not None:
-        message = 'Only one of the following CLI arguments may be specified: \'--toggle-output', '--set-output\'!'
+        message = "Only one of the following CLI arguments may be specified: '--toggle-output', '--set-output'!"
         print(message)
         parser.print_help()
         raise ValueError(message)
@@ -583,6 +560,8 @@ def device_set_audio_effects(api: G6Api, args: argparse.Namespace):
         if args.lighting_rgb is not None:
             red, green, blue = args.lighting_rgb
             api.lighting_enable_set_rgb(red=red, green=green, blue=blue)
+        if args.lighting_volume_ring is not None:
+            api.lighting_volume_ring(enable=(args.lighting_volume_ring == 'Enabled'))
 
         #
         # Mixer
@@ -728,12 +707,67 @@ def device_set_audio_effects(api: G6Api, args: argparse.Namespace):
             api.reload_alsa_and_pipewire(sudo=use_sudo)
 
 
-def main():
+def format_status(status: DeviceStatus, as_json: bool) -> str:
+    """
+    Render a DeviceStatus for the console, either as JSON or as aligned 'key: value' lines.
+    """
+    if as_json:
+        return json.dumps(status.to_dict(), indent=2)
+
+    def fmt(value):
+        if value is None:
+            return '?'
+        if isinstance(value, bool):
+            return 'On' if value else 'Off'
+        return str(value)
+
+    rows = [
+        ('Firmware', status.firmware),
+        ('Output', status.output),
+        ('Decoder mode', status.decoder_mode),
+        ('DAC filter', DAC_FILTER_LABELS.get(status.dac_filter, status.dac_filter)),
+        ('Direct mode', status.direct_mode),
+        ('SPDIF direct', status.spdif_direct),
+        ('RGB light', status.rgb_enabled),
+        ('Volume ring', status.ring_enabled),
+    ]
+    return '\n'.join(f'{label:<13} {fmt(value)}' for label, value in rows)
+
+
+def _only_status_requested(args: argparse.Namespace) -> bool:
+    saved = args.status
+    args.status = False
+    try:
+        return not has_action(args)
+    finally:
+        args.status = saved
+
+
+def main(argv: list[str] | None = None):
     # parse CLI arguments
-    args = parse_cli_args()
+    args = parse_cli_args(argv)
+
+    # read-only status query (HID only, no USB claim needed)
+    if args.status:
+        status = read_status()
+        print(format_status(status, as_json=args.json))
+        if _only_status_requested(args):
+            return
 
     # look up the G6 device
     api = G6Api(dry_run=args.dry_run, debug=args.debug)
 
     # process arguments and call the api
     device_set_audio_effects(api=api, args=args)
+
+
+def cli_entry() -> None:
+    """
+    Console-script entry point: like main(), but turns expected failures into a message and exit code 1
+    instead of a traceback, so the CLI behaves well in scripts and automation.
+    """
+    try:
+        main()
+    except (IOError, OSError, RuntimeError, ValueError) as e:
+        print(f'error: {e}', file=sys.stderr)
+        sys.exit(1)

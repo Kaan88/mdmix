@@ -24,6 +24,9 @@ UDEV_RULE = r'SUBSYSTEM=="usb", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="3256
 # The payloads available to send to the G6
 PAYLOAD_HEX_LINE_PATTERN = r'^[a-f0-9]{128}$'
 
+# Device path used for the placeholder device in dry runs when no G6 is connected
+DRY_RUN_DEVICE_PATH = 'dry-run'
+
 
 class G6Device:
     AVAILABILITY_CHECK_INTERVAL_SECONDS = 0.1
@@ -45,6 +48,9 @@ class G6Device:
             return self.__b_configuration_value
 
         def is_available(self, dry_run: bool) -> bool:
+            if dry_run:
+                # dry run: never touch the device, the interface is 'available' once it has been (pretend) claimed
+                return self.__interface_claimed
             try:
                 # check availability in intervals
                 if self.__availability_last_checked is None or (
@@ -116,6 +122,12 @@ class G6Device:
                     self.__interface_claimed = False
 
         def release_interface(self, dry_run: bool):
+            if dry_run:
+                print('This is a dry run. No interface is released and no kernel driver is attached to the G6 device!')
+                self.__interface_claimed = False
+                self.__kernel_driver_attached = True
+                return
+
             # refresh kernel driver attached state
             self.__kernel_driver_attached = self.__check_kernel_driver_attached(dry_run=dry_run)
 
@@ -418,8 +430,19 @@ def detect_device(dry_run: bool, debug: bool) -> G6Device:
     A tree output of all connected USB devices can be generated with the command `lsusb -t`.
     :return: The unique device_path to the G6.
     """
-    return G6Device(audio_interface=_detect_device_audio_control(),
-                    hid_interface=_detect_device_hid(),
+    try:
+        audio_interface = _detect_device_audio_control()
+        hid_interface = _detect_device_hid()
+    except (IOError, usb.core.NoBackendError) as e:
+        if not dry_run:
+            raise
+        # A dry run must work without the device (e.g. in CI): fall back to placeholder interfaces.
+        print(f'This is a dry run. G6 not detected ({e}); using a placeholder device.')
+        audio_interface = G6Device.AudioInterface(usb_device=None, device_path=DRY_RUN_DEVICE_PATH,
+                                                  b_configuration_value=1)
+        hid_interface = G6Device.HidInterface(device_path=DRY_RUN_DEVICE_PATH)
+    return G6Device(audio_interface=audio_interface,
+                    hid_interface=hid_interface,
                     dry_run=dry_run,
                     debug=debug)
 

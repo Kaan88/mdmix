@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from g6_cli.g6_spec import UsbHidDataFragment, EMPTY_ADDITIONAL_PAYLOAD
+from g6_cli.g6_spec import UsbHidDataFragment, EMPTY_ADDITIONAL_PAYLOAD, DataFragmentMode
 
 LIGHTING_DISABLE_MODE = bytes.fromhex('3A02')
 LIGHTING_DISABLE_INTERMEDIATE = bytes.fromhex('0600')
@@ -14,6 +14,13 @@ LIGHTING_ENABLE_PRE_2_INTERMEDIATE = bytes.fromhex('0400')
 LIGHTING_ENABLE_RGB_MODE = bytes.fromhex('3A09')
 LIGHTING_ENABLE_RGB_INTERMEDIATE = bytes.fromhex('0A00')
 LIGHTING_ENABLE_RGB_AUDIO_FEATURE = bytes.fromhex('03')
+
+# Volume ring light (bright white LED under the volume knob).
+# Reverse-engineered from USBPcap captures. Command 0x0e, byte[5]: 0x00=on, 0x01=off.
+LIGHTING_VOLUME_RING_MODE = bytes.fromhex('3903')
+LIGHTING_VOLUME_RING_INTERMEDIATE = bytes.fromhex('000e')
+LIGHTING_VOLUME_RING_COMMIT_MODE = bytes.fromhex('3901')
+LIGHTING_VOLUME_RING_COMMIT_INTERMEDIATE = bytes.fromhex('0100')
 
 
 def lighting_disable() -> list[UsbHidDataFragment]:
@@ -29,6 +36,31 @@ def lighting_disable() -> list[UsbHidDataFragment]:
             value=bytes.fromhex('0000 0000'),
             additional_payload=EMPTY_ADDITIONAL_PAYLOAD,
         )
+    ]
+
+
+def lighting_volume_ring(enable: bool) -> list[UsbHidDataFragment]:
+    """
+    Enable or disable the volume ring light (bright white LED under the volume knob).
+    This is independent from the RGB accent light controlled by lighting_disable/lighting_enable_set_rgb.
+    :param enable: True to enable the volume ring light, False to disable it.
+    :return: The list of UsbHidDataFragment objects to send to the G6.
+    """
+    return [
+        UsbHidDataFragment(
+            mode=LIGHTING_VOLUME_RING_MODE,
+            intermediate=LIGHTING_VOLUME_RING_INTERMEDIATE,
+            audio_feature=bytes.fromhex('00') if enable else bytes.fromhex('01'),
+            value=bytes.fromhex('00000000'),
+            additional_payload=EMPTY_ADDITIONAL_PAYLOAD,
+        ),
+        UsbHidDataFragment(
+            mode=LIGHTING_VOLUME_RING_COMMIT_MODE,
+            intermediate=LIGHTING_VOLUME_RING_COMMIT_INTERMEDIATE,
+            audio_feature=bytes.fromhex('00'),
+            value=bytes.fromhex('00000000'),
+            additional_payload=EMPTY_ADDITIONAL_PAYLOAD,
+        ),
     ]
 
 

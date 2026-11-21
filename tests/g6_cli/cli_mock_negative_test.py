@@ -155,4 +155,5 @@ def test_cli_args_negative(
 
     # Verify the error message contains the expected snippet
     captured = capsys.readouterr()
-    assert expected_error_snippet in captured.err
+    # Python >= 3.12.8 quotes argparse choices; compare without quotes so both formats pass
+    assert expected_error_snippet.replace("'", "") in captured.err.replace("'", "")
