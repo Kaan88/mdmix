@@ -207,6 +207,11 @@ def build_status() -> list[dict]:
 
 
 DRY_RUN_CASES = [
+    # runs that fail: an error from main (exit 1, "error: ..." on stderr) and usage errors (exit 2)
+    ['--profile-load', 'does-not-exist.json'],
+    ['--lighting-effect', 'pulsate', '--lighting-effect-period', '-1'],
+    ['--eq-preset', 'nope'],
+    ['--sbx', 'Bogus'],
     ['--debug', '--set-output', 'Speakers'],
     ['--debug', '--playback-volume', '50'],
     ['--debug', '--playback-volume', '30', '--playback-volume-channels', 'Right'],

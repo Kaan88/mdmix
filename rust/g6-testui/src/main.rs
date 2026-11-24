@@ -68,7 +68,10 @@ fn apply(
     out: &mut Vec<u8>,
 ) -> Result<(), String> {
     let e = |e: g6_cli::CliError| e.to_string();
-    if !t.is_hid_available(out).map_err(e)? {
+    let mut err = Vec::new();
+    let available = t.is_hid_available_to(out, &mut err).map_err(e)?;
+    out.extend_from_slice(&err);
+    if !available {
         return Err("The G6 HID interface should be available at this point!".into());
     }
     let mut host = UiHost { output };

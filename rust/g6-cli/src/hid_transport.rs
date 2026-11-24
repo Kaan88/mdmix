@@ -169,10 +169,6 @@ impl HidTransport {
 }
 
 impl Transport for HidTransport {
-    fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError> {
-        self.check_hid_available(out, &mut std::io::stderr())
-    }
-
     fn is_hid_available_to(
         &mut self,
         out: &mut dyn Write,

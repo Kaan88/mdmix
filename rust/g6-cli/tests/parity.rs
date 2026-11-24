@@ -172,25 +172,14 @@ fn run(argv: &[String], env: &mut TestEnv) -> Output {
     }
 }
 
-/// What the `g6` binary shows and returns: stderr gets `error: ...` for the errors Python's `cli_entry` catches.
-fn shown(o: &Output) -> (String, String, i32) {
-    let mut err = o.err.clone();
-    let code = match &o.result {
-        Ok(()) => 0,
-        Err(e) => {
-            if let CliError::Msg(m) = e {
-                err.push_str(&format!(
-                    "error: {m}
-"
-                ));
-            }
-            e.code()
-        }
-    };
-    (o.out.clone(), err, code)
+/// What the `g6` binary shows and returns: `g6_cli::finish` (what `main` runs) adds `error: ...` to stderr.
+fn shown(o: Output) -> (String, String, i32) {
+    let mut err = o.err.into_bytes();
+    let code = g6_cli::finish(o.result, &mut err);
+    (o.out, String::from_utf8(err).unwrap(), code)
 }
 
-fn assert_matches_python(case: &Value, o: &Output, what: &str) {
+fn assert_matches_python(case: &Value, o: Output, what: &str) {
     let (out, err, code) = shown(o);
     assert_eq!(out, case["stdout"].as_str().unwrap(), "{what} stdout");
     assert_eq!(err, case["stderr"].as_str().unwrap(), "{what} stderr");
@@ -345,7 +334,7 @@ fn dry_run_output_matches_python() {
             toggle: tmp.0.join("toggle"),
         };
         let o = run(&dry(&argv), &mut env);
-        assert_matches_python(case, &o, &format!("{argv:?}"));
+        assert_matches_python(case, o, &format!("{argv:?}"));
     }
 }
 
@@ -370,7 +359,7 @@ fn writes_dry_run_output_matches_python() {
             toggle: toggle.clone(),
         };
         let o = run(&dry(&argv), &mut env);
-        assert_matches_python(case, &o, &format!("{argv:?}"));
+        assert_matches_python(case, o, &format!("{argv:?}"));
     }
 }
 
@@ -397,7 +386,7 @@ fn dry_run_device_lookup_matches_python() {
             toggle: tmp.0.join("toggle"),
         };
         let o = run(&dry(&argv), &mut env);
-        assert_matches_python(case, &o, &format!("{} {argv:?}", case["scenario"]));
+        assert_matches_python(case, o, &format!("{} {argv:?}", case["scenario"]));
     }
 }
 
@@ -436,6 +425,8 @@ impl Env for ClockEnv {
     }
     fn sleep(&mut self, seconds: f64) {
         self.now += seconds;
+        // a regression that never stops the stream fails here instead of hanging the test run
+        assert!(self.now < 10.0, "the effect didn't stop on Ctrl+C");
     }
     fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>> {
         None

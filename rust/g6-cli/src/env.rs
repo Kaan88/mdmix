@@ -3,8 +3,8 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::CliError;
@@ -101,18 +101,22 @@ pub fn python_temp_dir() -> PathBuf {
 /// The real system: the G6 over HID. The mixer readback and the output meter come with `g6-osaudio`.
 pub struct SystemEnv {
     start: Instant,
-    interrupted: Arc<AtomicBool>,
-    watching: bool,
 }
 
 impl Default for SystemEnv {
     fn default() -> Self {
         SystemEnv {
             start: Instant::now(),
-            interrupted: Arc::new(AtomicBool::new(false)),
-            watching: false,
         }
     }
+}
+
+/// The Ctrl+C flag. The handler can be installed once per process, so both live here: the first
+/// `watch_interrupt` sets them up.
+static CTRL_C: OnceLock<Result<Arc<AtomicBool>, String>> = OnceLock::new();
+
+fn ctrl_c_pressed() -> bool {
+    matches!(CTRL_C.get(), Some(Ok(flag)) if flag.load(Ordering::SeqCst))
 }
 
 impl Env for SystemEnv {
@@ -172,7 +176,7 @@ impl Env for SystemEnv {
             return;
         }
         let end = Instant::now() + Duration::from_secs_f64(seconds);
-        while !self.interrupted.load(Ordering::SeqCst) {
+        while !ctrl_c_pressed() {
             let left = end.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -182,17 +186,26 @@ impl Env for SystemEnv {
     }
 
     fn watch_interrupt(&mut self) -> Result<(), CliError> {
-        if !self.watching {
-            let flag = Arc::clone(&self.interrupted);
-            ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))
-                .map_err(|e| CliError::msg(format!("cannot watch for Ctrl+C: {e}")))?;
-            self.watching = true;
-        }
-        Ok(())
+        let installed = CTRL_C.get_or_init(|| {
+            let flag = Arc::new(AtomicBool::new(false));
+            let seen = Arc::clone(&flag);
+            // the first Ctrl+C asks the effect to stop and restore the colour; a second one means it is stuck
+            ctrlc::set_handler(move || {
+                if seen.swap(true, Ordering::SeqCst) {
+                    std::process::exit(130);
+                }
+            })
+            .map_err(|e| format!("cannot watch for Ctrl+C: {e}"))?;
+            Ok(flag)
+        });
+        installed
+            .as_ref()
+            .map(|_| ())
+            .map_err(|e| CliError::msg(e.clone()))
     }
 
     fn interrupted(&mut self) -> bool {
-        self.interrupted.load(Ordering::SeqCst)
+        ctrl_c_pressed()
     }
 
     fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>> {

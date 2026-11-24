@@ -1307,6 +1307,44 @@
  "dry_run": [
   {
    "argv": [
+    "--profile-load",
+    "does-not-exist.json"
+   ],
+   "stdout": "",
+   "stderr": "error: [Errno 2] No such file or directory: 'does-not-exist.json'\n",
+   "exit": 1
+  },
+  {
+   "argv": [
+    "--lighting-effect",
+    "pulsate",
+    "--lighting-effect-period",
+    "-1"
+   ],
+   "stdout": "This is a dry run. G6 not detected (No SoundBlaster X G6 device could be found by pyusb library having vendor_id='0x41e' and product_id='0x3256'. Is the device connected to your system? Are you allowed to access the device (missing udev-rules in linux)?); using a placeholder device.\nAbout to check availability of HID interface at path: dry-run ...\nAbout to check availability of HID interface at path: dry-run: This is a dry run. No availability check is performed!\n",
+   "stderr": "error: --lighting-effect-period must be > 0, got -1.0\n",
+   "exit": 1
+  },
+  {
+   "argv": [
+    "--eq-preset",
+    "nope"
+   ],
+   "stdout": "",
+   "stderr": "usage: soundblaster-x-g6-cli\nsoundblaster-x-g6-cli: error: unknown EQ preset 'nope', expected one of Acoustic, Classical, Country, Dance, Flat, HipHop, Jazz, Pop, RnB, Rock, Vocal, Gaming, AdventureAndAction, ApexLegend, ArenaOfValor, BattleRoyale, CallofDutySeries, CounterStrikeGlobalOffensive, Cyberpunk2077, DeathStranding, DoomEternal, Dota2, DrivingSimulation, EFT, Fortnite, FPS, GenshinImpact, LeagueOfLegends, MetalGearSolidVThePhantomPain, MOBA, Overwatch, PlayerUnknown, ProjectCars, RealTimeStrategy, RDR2, RocketLeague, RPG, Stadium, TheWitcher3WildHunt, Rainbow6Siege, Music, Movie, FootstepEnhancer\n",
+   "exit": 2
+  },
+  {
+   "argv": [
+    "--sbx",
+    "Bogus"
+   ],
+   "stdout": "",
+   "stderr": "usage: soundblaster-x-g6-cli\nsoundblaster-x-g6-cli: error: argument --sbx: invalid choice: 'Bogus' (choose from 'Enabled', 'Disabled')\n",
+   "exit": 2
+  },
+  {
+   "argv": [
     "--debug",
     "--set-output",
     "Speakers"
