@@ -3,12 +3,16 @@
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::CliError;
 use crate::hid_transport::HidTransport;
 use crate::transport::{DryRunTransport, Transport};
-use g6_device::{Hid, STATUS_NOT_FOUND};
+use g6_device::{
+    Hid, Lookup, PRODUCT_ID, STATUS_NOT_FOUND, VENDOR_ID, detect_error, py_bytes_repr,
+};
 use g6_proto::status::DeviceStatus;
 
 /// Python's `TOGGLE_STATE_TEMP_FILE_NAME`.
@@ -38,6 +42,50 @@ pub trait Env {
     fn sleep(&mut self, seconds: f64);
     /// The G6's output peak meter (0..1), where the OS has one.
     fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>>;
+    /// From here on Ctrl+C is reported by [`Env::interrupted`] instead of ending the process (Python's
+    /// `KeyboardInterrupt` in a lighting effect). Called before a lighting effect starts streaming.
+    fn watch_interrupt(&mut self) -> Result<(), CliError> {
+        Ok(())
+    }
+    /// Whether Ctrl+C has been pressed since [`Env::watch_interrupt`].
+    fn interrupted(&mut self) -> bool {
+        false
+    }
+}
+
+/// The text of Python's `IOError` for a G6 that pyusb doesn't find (its lookup comes before the HID one).
+pub fn usb_not_found_text() -> String {
+    format!(
+        "No SoundBlaster X G6 device could be found by pyusb library having vendor_id='{VENDOR_ID:#x}' and \
+         product_id='{PRODUCT_ID:#x}'. Is the device connected to your system? Are you allowed to access the \
+         device (missing udev-rules in linux)?"
+    )
+}
+
+/// The device lookup of Python's `detect_device` in a dry run, from what the HID enumeration found: the G6's
+/// interface 4 (then the dry run goes by its real path), or the placeholder device with the reason.
+/// Python looks for the USB Audio Control interface first (pyusb); the port has no USB lookup, so a G6 that
+/// HID finds counts as found, and a G6 that HID doesn't find is reported as pyusb not finding it.
+pub fn open_dry_run_device(
+    lookup: Result<Lookup, CliError>,
+    debug: bool,
+    out: &mut dyn Write,
+) -> Result<Box<dyn Transport>, CliError> {
+    let reason = match lookup {
+        Ok(Lookup::Found(path)) => {
+            let shown = py_bytes_repr(path.as_bytes());
+            writeln!(out, "Device with HID interface detected at path: {shown}")?;
+            return Ok(Box::new(DryRunTransport::with_path(&shown, debug)));
+        }
+        Ok(Lookup::NoInterface) => detect_error(true),
+        Ok(Lookup::NoDevice) => usb_not_found_text(),
+        Err(e) => e.to_string(),
+    };
+    writeln!(
+        out,
+        "This is a dry run. G6 not detected ({reason}); using a placeholder device."
+    )?;
+    Ok(Box::new(DryRunTransport::new(debug)))
 }
 
 /// `tempfile.gettempdir()`: Python looks at TMPDIR, TEMP and TMP first, in that order.
@@ -53,12 +101,16 @@ pub fn python_temp_dir() -> PathBuf {
 /// The real system: the G6 over HID. The mixer readback and the output meter come with `g6-osaudio`.
 pub struct SystemEnv {
     start: Instant,
+    interrupted: Arc<AtomicBool>,
+    watching: bool,
 }
 
 impl Default for SystemEnv {
     fn default() -> Self {
         SystemEnv {
             start: Instant::now(),
+            interrupted: Arc::new(AtomicBool::new(false)),
+            watching: false,
         }
     }
 }
@@ -73,13 +125,11 @@ impl Env for SystemEnv {
         if !dry_run {
             return Ok(Box::new(HidTransport::detect(debug, out)?));
         }
-        // Python looks for the G6 in a dry run too; the port doesn't, so a dry run never opens or enumerates
-        // anything (on Windows Python's USB lookup fails without libusb and ends up here as well)
-        writeln!(
-            out,
-            "This is a dry run. G6 not detected (the Rust port doesn't look for it in a dry run); using a placeholder device."
-        )?;
-        Ok(Box::new(DryRunTransport::new(debug)))
+        // Python looks for the G6 in a dry run too (reading only); a dry run works without one
+        let lookup = Hid::new()
+            .and_then(|mut hid| hid.lookup())
+            .map_err(|e| CliError::Msg(e.0));
+        open_dry_run_device(lookup, debug, out)
     }
 
     fn read_status(&mut self) -> Result<DeviceStatus, CliError> {
@@ -116,10 +166,33 @@ impl Env for SystemEnv {
         self.start.elapsed().as_secs_f64()
     }
 
+    /// Sleeps in short steps, so that Ctrl+C is noticed at once.
     fn sleep(&mut self, seconds: f64) {
-        if seconds > 0.0 && seconds.is_finite() {
-            std::thread::sleep(Duration::from_secs_f64(seconds));
+        if !(seconds > 0.0 && seconds.is_finite()) {
+            return;
         }
+        let end = Instant::now() + Duration::from_secs_f64(seconds);
+        while !self.interrupted.load(Ordering::SeqCst) {
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            std::thread::sleep(left.min(Duration::from_millis(20)));
+        }
+    }
+
+    fn watch_interrupt(&mut self) -> Result<(), CliError> {
+        if !self.watching {
+            let flag = Arc::clone(&self.interrupted);
+            ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))
+                .map_err(|e| CliError::msg(format!("cannot watch for Ctrl+C: {e}")))?;
+            self.watching = true;
+        }
+        Ok(())
+    }
+
+    fn interrupted(&mut self) -> bool {
+        self.interrupted.load(Ordering::SeqCst)
     }
 
     fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>> {

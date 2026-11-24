@@ -15,6 +15,14 @@ use g6_proto::packet::{HidReport, UsbRequest, hex};
 pub trait Transport {
     /// Whether the HID interface can be written to.
     fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError>;
+    /// Like [`Transport::is_hid_available`], with the stream Python prints a failed check on (stderr).
+    fn is_hid_available_to(
+        &mut self,
+        out: &mut dyn Write,
+        _err: &mut dyn Write,
+    ) -> Result<bool, CliError> {
+        self.is_hid_available(out)
+    }
     /// Whether the USB Audio Control interface is claimed and usable.
     fn is_audio_available(&mut self) -> bool;
     fn claim_audio(&mut self, out: &mut dyn Write) -> Result<(), CliError>;
@@ -47,9 +55,14 @@ pub struct DryRunTransport {
 
 impl DryRunTransport {
     pub fn new(debug: bool) -> Self {
+        Self::with_path(DRY_RUN_DEVICE_PATH, debug)
+    }
+
+    /// A dry run on the G6 that was found: `path` is the path as Python prints it (`b'...'`).
+    pub fn with_path(path: &str, debug: bool) -> Self {
         DryRunTransport {
             debug,
-            path: DRY_RUN_DEVICE_PATH.into(),
+            path: path.into(),
             hid_checked_at: None,
             audio_claimed: false,
         }

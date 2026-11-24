@@ -126,8 +126,12 @@ impl HidTransport {
     }
 }
 
-impl Transport for HidTransport {
-    fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError> {
+impl HidTransport {
+    fn check_hid_available(
+        &mut self,
+        out: &mut dyn Write,
+        err: &mut dyn Write,
+    ) -> Result<bool, CliError> {
         let due = self
             .hid_checked_at
             .is_none_or(|t| t.elapsed() > AVAILABILITY_CHECK_INTERVAL);
@@ -152,9 +156,8 @@ impl Transport for HidTransport {
                     )?;
                 }
                 Err(_) => {
-                    // Python prints this one on stderr
                     writeln!(
-                        out,
+                        err,
                         "Failed to check availability of HID interface at path: {p}"
                     )?;
                     self.hid_available = false;
@@ -162,6 +165,20 @@ impl Transport for HidTransport {
             }
         }
         Ok(self.hid_available)
+    }
+}
+
+impl Transport for HidTransport {
+    fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError> {
+        self.check_hid_available(out, &mut std::io::stderr())
+    }
+
+    fn is_hid_available_to(
+        &mut self,
+        out: &mut dyn Write,
+        err: &mut dyn Write,
+    ) -> Result<bool, CliError> {
+        self.check_hid_available(out, err)
     }
 
     fn is_audio_available(&mut self) -> bool {
