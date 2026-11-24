@@ -212,6 +212,30 @@ def test_format_status_shows_sbx_and_eq():
     assert data['sbx']['bass'] == {'enabled': False, 'level': 91} and data['eq_bands_db']['16k'] == -1.5
 
 
+@pytest.mark.parametrize('db', [0, 10, 20, 30])
+def test_mic_boost_from_captures(db):
+    from pathlib import Path
+    from g6_cli.g6_capture import load_events
+    raw = Path(__file__).resolve().parents[2] / 'payloads' / 'raw' / f'g6-recording-mic-boost-{db}db.pcapng'
+    answers = [e.response for e in load_events(raw) if e.kind == 'hid_out' and e.payload[:4] == s.Q_MIC_BOOST]
+    assert answers and all(s.parse_mic_boost(a) == db for a in answers)
+
+
+def test_mic_boost_rejects_write_echo_and_odd_values():
+    assert s.parse_mic_boost(resp('5a3c0400000214')) is None  # the write itself, not an answer
+    assert s.parse_mic_boost(resp('5a3c0401000207')) is None  # 7 dB is not a setting
+    assert s.parse_mic_boost(None) is None
+
+
+def test_mic_boost_in_status_and_output():
+    table = {**CAPTURED, s.Q_MIC_BOOST: resp('5a3c040100020a')}
+    st = s.collect_status(fake_transport(table))
+    assert st.mic_boost_db == 10
+    assert 'Mic boost     10 dB' in format_status(st, as_json=False)
+    assert json.loads(format_status(st, as_json=True))['mic_boost_db'] == 10
+    assert 'Mic boost     ?' in format_status(s.collect_status(fake_transport(CAPTURED)), as_json=False)
+
+
 def test_format_status_text_and_json():
     st = s.collect_status(fake_transport(CAPTURED))
     text = format_status(st, as_json=False)

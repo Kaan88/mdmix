@@ -14,16 +14,17 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Output speakers / headphones | ✅ | ✅ | HID | |
 | Direct mode | ✅ | ✅ | HID | flags byte A bit 0x20 |
 | SPDIF-out direct mode | ✅ | ✅ | HID | flags byte B bit 0x20 |
-| DAC filter | ✅ | 🟡 | HID | reads `0x00` while Direct mode is on: capture with it off |
-| Decoder mode (Normal/Full/Night) | ✅ | 🟡 | HID | same as DAC filter |
-| SBX Surround on/off + level | ✅ | ❌ | HID | try reading with the commit form `5a1103 0196 <feature>`; snapshot/diff |
-| SBX Crystalizer on/off + level | ✅ | ❌ | HID | as above |
-| SBX Bass on/off + level | ✅ | ❌ | HID | as above |
-| SBX Smart Volume on/off + level + Night/Loud | ✅ | ❌ | HID | as above |
-| SBX Dialog+ on/off + level | ✅ | ❌ | HID | as above |
-| Mic boost 0/10/20/30 dB | ✅ | 🟡 | HID | **`5a3c0201` → `5a3c0401 00 02 <dB>` seen in captures**; add to `g6_status` |
-| Voice clarity on/off, noise reduction, AEC, smart volume | ✅ | ❌ | HID | recording family `0195`; snapshot/diff |
-| Mic EQ on/off + presets | ✅ | ❌ | HID | |
+| DAC filter | ✅ | ✅ | HID | confirmed Fast→Slow min. phase in g6-sbc-startup-a/b (reads `0x00` only while Direct mode is on) |
+| Decoder mode (Normal/Full/Night) | ✅ | ✅ | HID | confirmed Normal→Night in g6-sbc-startup-a/b |
+| SBX Surround on/off + level | ✅ | ✅ | HID | `5a110301 96<id>` float32, ids = `AudioFeature` |
+| SBX Crystalizer on/off + level | ✅ | ✅ | HID | as above |
+| SBX Bass on/off + level | ✅ | ✅ | HID | as above; `9617` = 80.0 is probably the bass crossover (Hz), unconfirmed |
+| SBX Smart Volume on/off + level + Night/Loud | ✅ | ✅ | HID | mode = `9606` (0 Normal, 1 Loud, 2 Night) |
+| SBX Dialog+ on/off + level | ✅ | ✅ | HID | as above |
+| SBX master switch | ❓ | ❌ | HID | per-effect switches read 0 with it off, but no own readback found; capture toggling only the master |
+| Mic boost 0/10/20/30 dB | ✅ | ✅ | HID | `5a3c0201` → `5a3c0401 00 02 <dB>` |
+| Voice clarity on/off, noise reduction, AEC, smart volume | ✅ | 🟡 | HID | SBC reads `5a110301 95<id>` at startup (ids 04, 05, 0a–1b, 2c, 13); capture A/B with recording settings changed |
+| Mic EQ on/off + presets | ✅ | 🟡 | HID | probably `95 0b–0d` (400/1400/2000 = frequencies?) and `95 14–1b` (gains); same A/B capture |
 | RGB light on/off | ✅ | ✅ | HID | |
 | RGB static colour | ✅ | ❌ | HID | |
 | RGB effects (breathing, cycle, …) | ❌ | ❌ | HID | ❓ capture each effect |
@@ -34,8 +35,9 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Mic monitoring volume / mute | ✅ | ❌ | UAC | GET_CUR |
 | Mixer monitoring / recording sources | ✅ | ❌ | UAC | GET_CUR per source |
 | Speaker layout (stereo / 5.1 / 7.1) | ✅ | ❌ | UAC | ❓ may live in Windows driver settings, not on the device |
-| Graphic equalizer (bands, presets) | ❌ | ❌ | HID? | ❓ capture moving one band at a time; check the float encoding |
-| Scout Mode | ❌ | ❌ | HID? | ❓ |
+| Graphic equalizer on/off, preamp, 10 bands | ❌ | ✅ | HID | read `96 09` / `96 0a` / `96 0b–14` (dB float32). Set: very likely `5a1207 0196 <id> <float>` like SBX; capture one band move to confirm before adding |
+| EQ presets | – | – | – | app-side: a preset is just 10 band values |
+| Scout Mode | ❌ | 🟡 | HID | SBC writes `5a2605 07…` (blocked from replay); `5a260308ffff` answer changed 01→02 with it on. Capture an on/off pair |
 | Headphone gain / impedance | ❌ | ❌ | ? | ❓ may be the hardware switch only |
 | Profiles (save / load) | ❌ | – | – | probably app-side: a bundle of the settings above, no own protocol |
 | Firmware version | – | ✅ | HID | |

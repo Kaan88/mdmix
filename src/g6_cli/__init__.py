@@ -745,6 +745,7 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
             return '?' if v is None else f'{v:g}'
         bands = ' '.join(f'{freq}:{db(v)}' for freq, v in status.eq_bands_db.items())
         rows.append(('EQ (dB)', f'preamp {db(status.eq_preamp_db)} | {bands}'))
+    rows.append(('Mic boost', None if status.mic_boost_db is None else f'{status.mic_boost_db} dB'))
     return '\n'.join(f'{label:<13} {fmt(value)}' for label, value in rows)
 
 

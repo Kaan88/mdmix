@@ -13,6 +13,7 @@ Confidence of each field (as of firmware 2.1.250903.1324):
 - sbx (per-effect switch + level), smart_volume_mode, eq_*: float32 parameters (5a110301 96 <id>), matched against
   SoundBlaster Command in two settings states (payloads/raw/g6-sbc-startup-a/-b) and live reads.
   The SBX *master* switch has no known readback yet.
+- mic_boost_db: matched against the 0/10/20/30 dB captures.
 - Speaker layout (stereo/5.1/7.1) has no known readback and is intentionally not reported.
 """
 from __future__ import annotations
@@ -45,12 +46,16 @@ Q_DECODER = bytes.fromhex('5a1103019702')
 Q_DAC_FILTER = bytes.fromhex('5a6c0101')
 Q_RGB = (bytes.fromhex('5a020a3a00060100'), bytes.fromhex('5a3a020701'))
 Q_RING = (bytes.fromhex('5a020a3a000e0100'), bytes.fromhex('5a3a021001'))
+Q_MIC_BOOST = bytes.fromhex('5a3c0201')
 
 R_MODE_FLAGS_PREFIXES = (bytes.fromhex('5a390501'), bytes.fromhex('5a390902'))
 R_DECODER_PREFIX = bytes.fromhex('5a110801009702')
 R_DAC_FILTER_PREFIX = bytes.fromhex('5a6c0301')
 R_RGB_PREFIX = bytes.fromhex('5a3a0207')
 R_RING_PREFIX = bytes.fromhex('5a3a0210')
+# 5a 3c 04 01 00 02 <dB>; the write is the same with 00 instead of 01 (payloads/raw/g6-recording-mic-boost-*db)
+R_MIC_BOOST_PREFIX = bytes.fromhex('5a3c0401')
+MIC_BOOST_DB = (0, 10, 20, 30)
 
 OUTPUT_BY_CODE = {0x02: 'Speakers', 0x04: 'Headphones'}
 
@@ -110,6 +115,7 @@ class DeviceStatus:
     eq_enabled: Optional[bool] = None
     eq_preamp_db: Optional[float] = None
     eq_bands_db: Optional[dict] = None  # band label (Hz) -> dB
+    mic_boost_db: Optional[int] = None  # 0 | 10 | 20 | 30
 
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
@@ -191,6 +197,13 @@ def _percent(value: Optional[float]) -> Optional[int]:
     return None if value is None else round(value * 100)
 
 
+def parse_mic_boost(r: Optional[bytes]) -> Optional[int]:
+    """Mic boost in dB; None for a missing/foreign answer or a value SBC cannot set."""
+    if not r or len(r) < 7 or r[:4] != R_MIC_BOOST_PREFIX or r[6] not in MIC_BOOST_DB:
+        return None
+    return r[6]
+
+
 def parse_rgb(r: Optional[bytes]) -> Optional[bool]:
     return _parse_on_off(r, R_RGB_PREFIX)
 
@@ -247,6 +260,8 @@ def collect_status(query: Transport) -> DeviceStatus:
     bands = {freq: param(i) for freq, i in zip(EQ_BAND_FREQS, EQ_BAND_IDS)}
     if any(v is not None for v in bands.values()):
         status.eq_bands_db = bands
+
+    status.mic_boost_db = parse_mic_boost(query(Q_MIC_BOOST))
     return status
 
 
