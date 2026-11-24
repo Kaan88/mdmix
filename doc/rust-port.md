@@ -16,6 +16,71 @@ every vector in `tests/vectors/` and has been checked on a real G6 on Windows an
 Out of scope, as in the Python version: firmware updates, the Speaker Type and Bass Crossover controls
 (app-only, see `doc/parity.md`), and replaying captured writes that aren't understood.
 
+## Where it stands
+
+Phases 1 and 2 are done (step G0 of `doc/gui-plan.md`): the `rust/` workspace has `g6-proto` and `g6-cli` (binary
+`g6`), with no device I/O. Build, test and fixture commands are in `rust/README.md`.
+
+- **`g6-proto`**: every packet builder, enum and value range, the EQ presets, the lighting effects, the status
+  queries and parsers with a pure `collect_status`, and the order of writes in one place (`apply::Request::actions`).
+  Python's number formatting (`repr`, `format(x, 'g')`, half-even `round`) is in `pyfmt`.
+- **`g6-cli`**: Python's `main` step by step (parse, profile save/load, status, apply, lighting effect), behind a
+  `Transport` trait (a recording transport and a dry-run one; tests answer status queries from transcripts) and an
+  `Env` trait (status read, toggle state file, clock, output meter). `argparse.rs` reads the command line the way
+  Python 3.13's argparse does (abbreviations, values that start with "-", `=`, `--`, glued `-h`, the order errors
+  are found in, and their wording) and only then hands clap a spelled-out command line.
+- **Without a device** the binary only completes dry runs. Anything that needs the G6, including `--status` and
+  `--profile-save` (it reads the status first), says "device access isn't built yet in the Rust port (step G1)".
+  `--profile-save` is tested through the fake transport instead.
+
+What was run (2026-11-24, Windows, cargo 1.99.1, Python 3.13.17):
+
+- `cargo test --release --workspace`: all pass. That covers:
+  - every `writes.json` case through the real argument parser and the recording transport, compared exactly and
+    in order;
+  - `effects.json` (floats to 1e-9), `eq_presets.json` and `status_live.json`;
+  - `rust/g6-cli/tests/fixtures/python_output.json` from `tools/rust_fixtures.py`: `--status` text and `--json`
+    for five transcripts, dry-run output, lighting effect writes, every option's definition, profile save and
+    load, float formatting, and 93 awkward command lines.
+- `cargo fmt --all --check` and `cargo clippy --release --workspace --all-targets -- -D warnings`: clean.
+- `python -m pytest -q -m "not hardware"`: 1290 passed. No Python behaviour was changed.
+
+What wasn't run, on purpose: anything that touches a G6 or any USB/HID device (no `hidapi` or `rusb` yet), the
+hardware tests, `tools/export_vectors.py --live`, and Python's `--claim-and-release` and `--reload-audio-services`,
+not even as dry runs. The Rust claim/release/reload paths were written from reading the Python source and are
+unverified.
+
+Known differences from Python:
+
+- **Help text** is clap's layout of the same options, headings and help strings; argparse's group descriptions are
+  missing. Usage errors, `--version` and exit codes match.
+- **Non-ASCII digits**: Python's `int()`, `float()` and argparse's negative-number test accept any Unicode digit;
+  the port takes ASCII digits only.
+- **Profiles** are read by a small JSON reader in `g6-cli::pyval` that copies `json.loads` (key order, a repeated key,
+  `NaN`/`Infinity`, integers of any size, error messages), not by `serde_json`. A lone surrogate escape in a profile string
+  becomes U+FFFD, where Python keeps the surrogate. Its `repr` in error messages escapes fewer non-printable
+  characters than Python's.
+- **`--status` mixer values** are always null: the Windows Core Audio reads come with `g6-osaudio`.
+- **Temp directory** for `--toggle-output`: TMPDIR, TEMP, TMP, then the OS default, without Python's check that
+  the directory is writable.
+- **Lighting effects** without `--dry-run` need the device; Ctrl+C handling and the music meter come with G1.
+
+Python bugs found (reported, not fixed; the port copies the behaviour):
+
+- `device_toggle_output` sends the opposite of what it prints: when the state file says the next state is
+  Speakers ("Toggle to Speakers"), it sends `toggle_to_headphones`, and the other way round.
+- `--lighting-effect pulsate --lighting-effect-duration nan --dry-run` never ends: `min(nan, period)` is `nan` and
+  `t >= nan` is never true.
+- `_percent(inf)` in `g6_status` (`round(inf * 100)`) raises `OverflowError`, which `cli_entry` doesn't catch, so a
+  status answer that decodes to infinity ends in a traceback.
+
+A port bug found and fixed on the way: clap appended a repeated `--lighting-rgb` (`1 2 3 --lighting-rgb 4 5 6`),
+where argparse keeps the last colour. The argv fixture pins it.
+
+Left for G1 (`doc/gui-plan.md`): `g6-device` on Windows HID (`hidapi`, interface 4, report id 0), the status
+query loop on the real device (`g6 --status --json` must match Python's), Ctrl+C for lighting effects, and the
+Core Audio reads and output meter in `g6-osaudio`.
+
 ## Test vectors (`tests/vectors/`)
 
 They are generated from the Python code by `tools/export_vectors.py`, and `tests/g6_cli/vectors_test.py` fails when
