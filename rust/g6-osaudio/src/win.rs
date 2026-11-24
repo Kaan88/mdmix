@@ -7,9 +7,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::c_void;
+use std::marker::PhantomData;
 
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
-use windows::Win32::Foundation::PROPERTYKEY;
+use windows::Win32::Foundation::{E_FAIL, PROPERTYKEY};
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
     DEVICE_STATE_ACTIVE, EDataFlow, IAudioMute, IAudioVolumeLevel, IDeviceTopology, IMMDevice,
@@ -28,15 +29,16 @@ use crate::{
     EndpointVolume, Flow, TopologyControl, build_mixer, is_g6_endpoint, round_percent, round2,
 };
 
-/// Joins the calling thread to the MTA and leaves it again on drop (only when this guard joined it).
-struct ComGuard(bool);
+/// Joins the calling thread to the MTA and leaves it again on drop (only when this guard joined it). The raw-pointer
+/// marker makes it `!Send` and `!Sync`, so it can't be dropped on another thread.
+struct ComGuard(bool, PhantomData<*const ()>);
 
 impl ComGuard {
     fn new() -> Self {
         // SAFETY: plain call with no pointers; an error (e.g. the thread already is an STA) just means we don't
         // own an initialisation and must not call CoUninitialize.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        ComGuard(hr.is_ok())
+        ComGuard(hr.is_ok(), PhantomData)
     }
 }
 
@@ -58,7 +60,7 @@ fn take_string(p: PWSTR) -> String {
     // SAFETY: `p` came from a Core Audio call that hands back a NUL-terminated string allocated with
     // CoTaskMemAlloc; we read it once and free it once.
     unsafe {
-        let s = p.to_string().unwrap_or_default();
+        let s = String::from_utf16_lossy(p.as_wide());
         CoTaskMemFree(Some(p.0 as *const c_void));
         s
     }
@@ -83,7 +85,7 @@ fn property(dev: &IMMDevice, key: &PROPERTYKEY) -> Result<Prop> {
             if p.is_null() {
                 Prop::Text(String::new())
             } else {
-                Prop::Text(p.to_string().unwrap_or_default())
+                Prop::Text(String::from_utf16_lossy(p.as_wide()))
             }
         } else if inner.vt == VT_UI4 {
             Prop::U32(inner.Anonymous.ulVal)
@@ -146,11 +148,13 @@ fn endpoints(en: &IMMDeviceEnumerator) -> Result<Vec<EndpointVolume>> {
                     vol.GetMute()?,
                 )
             };
+            // Python's round() raises on NaN/inf, which ends up as `mixer: null`
+            let level_percent = round_percent(f64::from(scalar)).ok_or(E_FAIL)?;
             results.push(EndpointVolume {
                 name,
                 flow: kind,
                 level_db: round2(f64::from(db)),
-                level_percent: round_percent(f64::from(scalar)),
+                level_percent,
                 muted: muted.as_bool(),
                 is_default: default.as_deref() == Some(device_id(&dev)?.as_str()),
             });
@@ -261,7 +265,7 @@ pub fn read_mixer() -> Option<crate::Mixer> {
 }
 
 /// IAudioMeterInformation of the G6 playback endpoint. Field order matters: the interface is released before the
-/// COM guard leaves the apartment.
+/// COM guard leaves the apartment. While it exists, the opening thread stays in the MTA.
 pub struct Meter {
     meter: IAudioMeterInformation,
     _com: ComGuard,

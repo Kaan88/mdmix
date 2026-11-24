@@ -197,9 +197,10 @@ pub fn round2(x: f64) -> f64 {
     format!("{x:.2}").parse().unwrap_or(x)
 }
 
-/// Python's `round(scalar * 100)`: half to even.
-pub fn round_percent(scalar: f64) -> i64 {
-    (scalar * 100.0).round_ties_even() as i64
+/// Python's `round(scalar * 100)`: half to even. `None` where Python's `round` raises (NaN, infinity).
+pub fn round_percent(scalar: f64) -> Option<i64> {
+    let v = scalar * 100.0;
+    v.is_finite().then(|| v.round_ties_even() as i64)
 }
 
 fn db_text(v: f64) -> String {
@@ -279,6 +280,11 @@ pub fn read_mixer() -> Option<Mixer> {
 
 /// The current peak level (0..1, linear) of what the G6 is playing: Core Audio's `IAudioMeterInformation` on the
 /// G6 playback endpoint. Not `Send`: keep it on the thread that opened it.
+///
+/// Opening one joins that thread to the COM multithreaded apartment for as long as the meter lives. A thread that
+/// later needs a single-threaded apartment (a GUI thread initialising OLE or drag and drop, for instance) would then
+/// fail with `RPC_E_CHANGED_MODE`. So open the meter on its own polling thread, or only after the UI has initialised
+/// COM itself (then this crate just reuses that apartment).
 #[cfg(windows)]
 pub struct OutputMeter(win::Meter);
 
@@ -300,7 +306,8 @@ impl OutputMeter {
     }
 }
 
-/// `open_output_meter`: `None` when there is no G6 playback endpoint or this platform has no meter.
+/// `open_output_meter`: `None` when there is no G6 playback endpoint or this platform has no meter. Call it on the
+/// thread that will poll the meter, not on a GUI thread that hasn't initialised COM yet (see [`OutputMeter`]).
 pub fn open_output_meter() -> Option<OutputMeter> {
     #[cfg(windows)]
     {
@@ -395,9 +402,12 @@ mod tests {
     fn rounding_follows_python() {
         assert_eq!(round2(-12.345_678), -12.35);
         assert_eq!(round2(0.125), 0.12); // exact tie: half to even
-        assert_eq!(round_percent(0.425), 42); // 42.5 -> 42
-        assert_eq!(round_percent(0.435), 44); // 43.5 -> 44
-        assert_eq!(round_percent(1.0), 100);
+        // f32 values widened to f64, as Core Audio hands them over (0.425f32 is 42.5000011...); Python: 43
+        assert_eq!(round_percent(f64::from(0.425f32)), Some(43));
+        assert_eq!(round_percent(0.425), Some(42)); // an exact f64 tie goes to even
+        assert_eq!(round_percent(1.0), Some(100));
+        assert_eq!(round_percent(f64::NAN), None);
+        assert_eq!(round_percent(f64::INFINITY), None);
     }
 
     fn sample() -> Mixer {

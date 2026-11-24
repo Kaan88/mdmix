@@ -291,77 +291,8 @@ pub fn format_status_with_mixer(st: &DeviceStatus, mixer: Option<&Mixer>, as_jso
 #[cfg(test)]
 mod mixer_tests {
     use super::*;
-    use g6_osaudio::MonitoringEntry;
 
-    fn mixer() -> Mixer {
-        let ep = |pct, db, default| EndpointEntry {
-            level_percent: pct,
-            level_db: db,
-            muted: false,
-            default,
-        };
-        Mixer {
-            playback: vec![("Speakers".into(), ep(96, -0.61, true))],
-            recording: vec![("Line In".into(), ep(68, 0.0, false))],
-            monitoring: vec![(
-                "External Mic".into(),
-                MonitoringEntry {
-                    level_db: Some(8.08),
-                    muted: Some(true),
-                },
-            )],
-            speaker_layout: Some("Stereo".into()),
-        }
-    }
-
-    #[test]
-    fn json_mixer_matches_python_layout() {
-        let json = format_status_with_mixer(&DeviceStatus::default(), Some(&mixer()), true);
-        let tail = json.split("\"mixer\": ").nth(1).unwrap();
-        let expected = r#"{
-    "playback": {
-      "Speakers": {
-        "level_percent": 96,
-        "level_db": -0.61,
-        "muted": false,
-        "default": true
-      }
-    },
-    "recording": {
-      "Line In": {
-        "level_percent": 68,
-        "level_db": 0.0,
-        "muted": false,
-        "default": false
-      }
-    },
-    "monitoring": {
-      "External Mic": {
-        "level_db": 8.08,
-        "muted": true
-      }
-    },
-    "speaker_layout": "Stereo"
-  }
-}"#;
-        assert_eq!(tail, expected);
-    }
-
-    #[test]
-    fn text_mixer_rows_follow_the_status_rows() {
-        let text = format_status_with_mixer(&DeviceStatus::default(), Some(&mixer()), false);
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(
-            lines[lines.len() - 4..],
-            [
-                "Playback vol  Speakers: 96% -0.6 dB",
-                "Recording     Line In: 68% +0.0 dB",
-                "Monitoring    External Mic: +8.1 dB (muted)",
-                "Speaker setup Stereo (Windows)",
-            ]
-        );
-    }
-
+    // JSON and text with a mixer are compared with Python's output in tests/parity.rs
     #[test]
     fn no_mixer_means_null_and_no_rows() {
         let st = DeviceStatus::default();

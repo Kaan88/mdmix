@@ -1304,6 +1304,1004 @@
    ]
   }
  ],
+ "mixer": [
+  {
+   "name": "typical",
+   "exchanges": [
+    {
+     "query": "5a070102",
+     "response": "5a0710322e312e3235303930332e31333234"
+    },
+    {
+     "query": "5a2c0101",
+     "response": "5a2c050102"
+    },
+    {
+     "query": "5a020a398100",
+     "response": null
+    },
+    {
+     "query": "5a390101",
+     "response": "5a39050120400004"
+    },
+    {
+     "query": "5a1103019702",
+     "response": "5a11080100970200000040"
+    },
+    {
+     "query": "5a6c0101",
+     "response": "5a6c030102"
+    },
+    {
+     "query": "5a020a3a00060100",
+     "response": null
+    },
+    {
+     "query": "5a3a020701",
+     "response": "5a3a0207"
+    },
+    {
+     "query": "5a1103019600",
+     "response": "5a1108010096"
+    },
+    {
+     "query": "5a1103019601",
+     "response": "5a1108010096010000003f"
+    },
+    {
+     "query": "5a1103019607",
+     "response": "5a110801009607"
+    },
+    {
+     "query": "5a1103019608",
+     "response": "5a1108010096080000003f"
+    },
+    {
+     "query": "5a1103019618",
+     "response": "5a110801009618"
+    },
+    {
+     "query": "5a1103019619",
+     "response": "5a1108010096190000003f"
+    },
+    {
+     "query": "5a1103019604",
+     "response": "5a110801009604"
+    },
+    {
+     "query": "5a1103019605",
+     "response": "5a110801009605a4703d3f"
+    },
+    {
+     "query": "5a1103019602",
+     "response": "5a110801009602"
+    },
+    {
+     "query": "5a1103019603",
+     "response": "5a1108010096030000003f"
+    },
+    {
+     "query": "5a1103019606",
+     "response": "5a110801009606"
+    },
+    {
+     "query": "5a1103019609",
+     "response": "5a110801009609"
+    },
+    {
+     "query": "5a110301960a",
+     "response": "5a11080100960a"
+    },
+    {
+     "query": "5a110301960b",
+     "response": "5a11080100960b"
+    },
+    {
+     "query": "5a110301960c",
+     "response": "5a11080100960c"
+    },
+    {
+     "query": "5a110301960d",
+     "response": "5a11080100960d00000040"
+    },
+    {
+     "query": "5a110301960e",
+     "response": "5a11080100960e00002040"
+    },
+    {
+     "query": "5a110301960f",
+     "response": "5a11080100960f0000c03f"
+    },
+    {
+     "query": "5a1103019610",
+     "response": "5a11080100961000002040"
+    },
+    {
+     "query": "5a1103019611",
+     "response": "5a110801009611"
+    },
+    {
+     "query": "5a1103019612",
+     "response": "5a110801009612000020c0"
+    },
+    {
+     "query": "5a1103019613",
+     "response": "5a110801009613000080bf"
+    },
+    {
+     "query": "5a1103019614",
+     "response": "5a1108010096140000c0bf"
+    },
+    {
+     "query": "5a3c0201",
+     "response": "5a3c04010002"
+    },
+    {
+     "query": "5a260308ffff",
+     "response": "5a260b08ffff"
+    },
+    {
+     "query": "5a1103019504",
+     "response": "5a110801009504"
+    },
+    {
+     "query": "5a1103019505",
+     "response": "5a110801009505"
+    },
+    {
+     "query": "5a1103019500",
+     "response": "5a1108010095"
+    },
+    {
+     "query": "5a110301952c",
+     "response": "5a11080100952c"
+    },
+    {
+     "query": "5a1103019513",
+     "response": "5a110801009513"
+    },
+    {
+     "query": "5a1103019514",
+     "response": "5a110801009514000040c0"
+    },
+    {
+     "query": "5a1103019515",
+     "response": "5a110801009515000080c0"
+    },
+    {
+     "query": "5a1103019516",
+     "response": "5a110801009516"
+    },
+    {
+     "query": "5a1103019517",
+     "response": "5a11080100951700000040"
+    },
+    {
+     "query": "5a1103019518",
+     "response": "5a11080100951800004040"
+    },
+    {
+     "query": "5a1103019519",
+     "response": "5a110801009519000040c0"
+    },
+    {
+     "query": "5a110301951a",
+     "response": "5a11080100951a00008040"
+    },
+    {
+     "query": "5a110301951b",
+     "response": "5a11080100951b0000a040"
+    }
+   ],
+   "endpoints": [
+    {
+     "name": "Speakers (Sound BlasterX G6)",
+     "flow": "playback",
+     "level_db": -0.61,
+     "level_percent": 96,
+     "muted": false,
+     "is_default": true
+    },
+    {
+     "name": "SPDIF In (Sound BlasterX G6)",
+     "flow": "recording",
+     "level_db": 0.0,
+     "level_percent": 68,
+     "muted": false,
+     "is_default": false
+    },
+    {
+     "name": "External Mic (Sound BlasterX G6)",
+     "flow": "recording",
+     "level_db": 0.0,
+     "level_percent": 68,
+     "muted": true,
+     "is_default": true
+    }
+   ],
+   "controls": [
+    {
+     "name": "Speaker Volume",
+     "level_db": [
+      -3.0
+     ],
+     "muted": null
+    },
+    {
+     "name": "Microphone Volume",
+     "level_db": [
+      8.08,
+      8.08
+     ],
+     "muted": null
+    },
+    {
+     "name": "Microphone Mute",
+     "level_db": [],
+     "muted": true
+    },
+    {
+     "name": "SPDIF-In Mute",
+     "level_db": [],
+     "muted": false
+    },
+    {
+     "name": "Auxiliary Volume",
+     "level_db": [
+      0.0
+     ],
+     "muted": null
+    },
+    {
+     "name": "Auxiliary Mute",
+     "level_db": [],
+     "muted": false
+    },
+    {
+     "name": "External Input Recording",
+     "level_db": [
+      0.0
+     ],
+     "muted": null
+    }
+   ],
+   "mask": 3,
+   "text": "Firmware      2.1.250903.1324\nOutput        Speakers\nDecoder mode  Normal\nDAC filter    Slow Roll-off / Minimum Phase\nDirect mode   On\nSPDIF direct  Off\nLine Out virt Off\nRGB light     Off\nVolume ring   Off\nSBX           Off\nScout mode    Off\nSurround      Off, 50\nCrystalizer   Off, 50\nBass          Off, 50\nSmart volume  Off, 74, Normal\nDialog+       Off, 50\nEqualizer     Off\nEQ (dB)       preamp 0 | 31:0 62:0 125:2 250:2.5 500:1.5 1k:2.5 2k:0 4k:-2.5 8k:-1 16k:-1.5\nMic boost     0 dB\nVoice clarity Off\nNoise reduct. Off, 0\nEcho cancel.  Off\nMic smart vol Off\nMic EQ        Off, PRESET_1\nPlayback vol  Speakers: 96% -0.6 dB\nRecording     SPDIF In: 68% +0.0 dB\n              External Mic: 68% +0.0 dB (muted)\nMonitoring    External Mic: +8.1 dB (muted)\n              SPDIF In: not muted\n              Line In: +0.0 dB\n              External Input Recording: +0.0 dB\nSpeaker setup Stereo (Windows)\n",
+   "json": "{\n  \"firmware\": \"2.1.250903.1324\",\n  \"output\": \"Speakers\",\n  \"decoder_mode\": \"Normal\",\n  \"dac_filter\": \"SLOW_ROLL_OFF_MINIMUM_PHASE\",\n  \"direct_mode\": true,\n  \"spdif_direct\": false,\n  \"line_out_headphone_virtualization\": false,\n  \"rgb_enabled\": false,\n  \"ring_enabled\": false,\n  \"mode_flags\": [\n    \"0x20\",\n    \"0x40\"\n  ],\n  \"sbx\": {\n    \"surround\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"crystalizer\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"bass\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"smart_volume\": {\n      \"enabled\": false,\n      \"level\": 74\n    },\n    \"dialog_plus\": {\n      \"enabled\": false,\n      \"level\": 50\n    }\n  },\n  \"smart_volume_mode\": \"Normal\",\n  \"eq_enabled\": false,\n  \"eq_preamp_db\": 0.0,\n  \"eq_bands_db\": {\n    \"31\": 0.0,\n    \"62\": 0.0,\n    \"125\": 2.0,\n    \"250\": 2.5,\n    \"500\": 1.5,\n    \"1k\": 2.5,\n    \"2k\": 0.0,\n    \"4k\": -2.5,\n    \"8k\": -1.0,\n    \"16k\": -1.5\n  },\n  \"mic_boost_db\": 0,\n  \"sbx_enabled\": false,\n  \"scout_mode\": false,\n  \"voice_clarity\": false,\n  \"recording\": {\n    \"noise_reduction\": false,\n    \"noise_reduction_level\": 0,\n    \"acoustic_echo_cancellation\": false,\n    \"smart_volume\": false,\n    \"mic_eq\": false\n  },\n  \"mic_eq_preset\": \"PRESET_1\",\n  \"mixer\": {\n    \"playback\": {\n      \"Speakers\": {\n        \"level_percent\": 96,\n        \"level_db\": -0.61,\n        \"muted\": false,\n        \"default\": true\n      }\n    },\n    \"recording\": {\n      \"SPDIF In\": {\n        \"level_percent\": 68,\n        \"level_db\": 0.0,\n        \"muted\": false,\n        \"default\": false\n      },\n      \"External Mic\": {\n        \"level_percent\": 68,\n        \"level_db\": 0.0,\n        \"muted\": true,\n        \"default\": true\n      }\n    },\n    \"monitoring\": {\n      \"External Mic\": {\n        \"level_db\": 8.08,\n        \"muted\": true\n      },\n      \"SPDIF In\": {\n        \"level_db\": null,\n        \"muted\": false\n      },\n      \"Line In\": {\n        \"level_db\": 0.0,\n        \"muted\": false\n      },\n      \"External Input Recording\": {\n        \"level_db\": 0.0,\n        \"muted\": null\n      }\n    },\n    \"speaker_layout\": \"Stereo\"\n  }\n}\n"
+  },
+  {
+   "name": "repeated names, odd values",
+   "exchanges": [
+    {
+     "query": "5a070102",
+     "response": "5a0710322e312e3235303930332e31333234"
+    },
+    {
+     "query": "5a2c0101",
+     "response": "5a2c050102"
+    },
+    {
+     "query": "5a020a398100",
+     "response": null
+    },
+    {
+     "query": "5a390101",
+     "response": "5a39050120400004"
+    },
+    {
+     "query": "5a1103019702",
+     "response": "5a11080100970200000040"
+    },
+    {
+     "query": "5a6c0101",
+     "response": "5a6c030102"
+    },
+    {
+     "query": "5a020a3a00060100",
+     "response": null
+    },
+    {
+     "query": "5a3a020701",
+     "response": "5a3a0207"
+    },
+    {
+     "query": "5a1103019600",
+     "response": "5a1108010096"
+    },
+    {
+     "query": "5a1103019601",
+     "response": "5a1108010096010000003f"
+    },
+    {
+     "query": "5a1103019607",
+     "response": "5a110801009607"
+    },
+    {
+     "query": "5a1103019608",
+     "response": "5a1108010096080000003f"
+    },
+    {
+     "query": "5a1103019618",
+     "response": "5a110801009618"
+    },
+    {
+     "query": "5a1103019619",
+     "response": "5a1108010096190000003f"
+    },
+    {
+     "query": "5a1103019604",
+     "response": "5a110801009604"
+    },
+    {
+     "query": "5a1103019605",
+     "response": "5a110801009605a4703d3f"
+    },
+    {
+     "query": "5a1103019602",
+     "response": "5a110801009602"
+    },
+    {
+     "query": "5a1103019603",
+     "response": "5a1108010096030000003f"
+    },
+    {
+     "query": "5a1103019606",
+     "response": "5a110801009606"
+    },
+    {
+     "query": "5a1103019609",
+     "response": "5a110801009609"
+    },
+    {
+     "query": "5a110301960a",
+     "response": "5a11080100960a"
+    },
+    {
+     "query": "5a110301960b",
+     "response": "5a11080100960b"
+    },
+    {
+     "query": "5a110301960c",
+     "response": "5a11080100960c"
+    },
+    {
+     "query": "5a110301960d",
+     "response": "5a11080100960d00000040"
+    },
+    {
+     "query": "5a110301960e",
+     "response": "5a11080100960e00002040"
+    },
+    {
+     "query": "5a110301960f",
+     "response": "5a11080100960f0000c03f"
+    },
+    {
+     "query": "5a1103019610",
+     "response": "5a11080100961000002040"
+    },
+    {
+     "query": "5a1103019611",
+     "response": "5a110801009611"
+    },
+    {
+     "query": "5a1103019612",
+     "response": "5a110801009612000020c0"
+    },
+    {
+     "query": "5a1103019613",
+     "response": "5a110801009613000080bf"
+    },
+    {
+     "query": "5a1103019614",
+     "response": "5a1108010096140000c0bf"
+    },
+    {
+     "query": "5a3c0201",
+     "response": "5a3c04010002"
+    },
+    {
+     "query": "5a260308ffff",
+     "response": "5a260b08ffff"
+    },
+    {
+     "query": "5a1103019504",
+     "response": "5a110801009504"
+    },
+    {
+     "query": "5a1103019505",
+     "response": "5a110801009505"
+    },
+    {
+     "query": "5a1103019500",
+     "response": "5a1108010095"
+    },
+    {
+     "query": "5a110301952c",
+     "response": "5a11080100952c"
+    },
+    {
+     "query": "5a1103019513",
+     "response": "5a110801009513"
+    },
+    {
+     "query": "5a1103019514",
+     "response": "5a110801009514000040c0"
+    },
+    {
+     "query": "5a1103019515",
+     "response": "5a110801009515000080c0"
+    },
+    {
+     "query": "5a1103019516",
+     "response": "5a110801009516"
+    },
+    {
+     "query": "5a1103019517",
+     "response": "5a11080100951700000040"
+    },
+    {
+     "query": "5a1103019518",
+     "response": "5a11080100951800004040"
+    },
+    {
+     "query": "5a1103019519",
+     "response": "5a110801009519000040c0"
+    },
+    {
+     "query": "5a110301951a",
+     "response": "5a11080100951a00008040"
+    },
+    {
+     "query": "5a110301951b",
+     "response": "5a11080100951b0000a040"
+    }
+   ],
+   "endpoints": [
+    {
+     "name": "Speakers (Sound BlasterX G6)",
+     "flow": "playback",
+     "level_db": -0.04,
+     "level_percent": 37,
+     "muted": true,
+     "is_default": true
+    },
+    {
+     "name": "Speakers (2- Sound BlasterX G6)",
+     "flow": "playback",
+     "level_db": -26.5,
+     "level_percent": 5,
+     "muted": false,
+     "is_default": false
+    },
+    {
+     "name": "Line In (Sound BlasterX G6)",
+     "flow": "recording",
+     "level_db": -0.0,
+     "level_percent": 100,
+     "muted": false,
+     "is_default": false
+    }
+   ],
+   "controls": [
+    {
+     "name": "Auxiliary",
+     "level_db": [
+      -0.0
+     ],
+     "muted": null
+    },
+    {
+     "name": "Mystery Mute",
+     "level_db": [],
+     "muted": true
+    }
+   ],
+   "mask": 4660,
+   "text": "Firmware      2.1.250903.1324\nOutput        Speakers\nDecoder mode  Normal\nDAC filter    Slow Roll-off / Minimum Phase\nDirect mode   On\nSPDIF direct  Off\nLine Out virt Off\nRGB light     Off\nVolume ring   Off\nSBX           Off\nScout mode    Off\nSurround      Off, 50\nCrystalizer   Off, 50\nBass          Off, 50\nSmart volume  Off, 74, Normal\nDialog+       Off, 50\nEqualizer     Off\nEQ (dB)       preamp 0 | 31:0 62:0 125:2 250:2.5 500:1.5 1k:2.5 2k:0 4k:-2.5 8k:-1 16k:-1.5\nMic boost     0 dB\nVoice clarity Off\nNoise reduct. Off, 0\nEcho cancel.  Off\nMic smart vol Off\nMic EQ        Off, PRESET_1\nPlayback vol  Speakers: 5% -26.5 dB\nRecording     Line In: 100% -0.0 dB\nMonitoring    Line In: -0.0 dB\n              Mystery: muted\nSpeaker setup 0x1234 (Windows)\n",
+   "json": "{\n  \"firmware\": \"2.1.250903.1324\",\n  \"output\": \"Speakers\",\n  \"decoder_mode\": \"Normal\",\n  \"dac_filter\": \"SLOW_ROLL_OFF_MINIMUM_PHASE\",\n  \"direct_mode\": true,\n  \"spdif_direct\": false,\n  \"line_out_headphone_virtualization\": false,\n  \"rgb_enabled\": false,\n  \"ring_enabled\": false,\n  \"mode_flags\": [\n    \"0x20\",\n    \"0x40\"\n  ],\n  \"sbx\": {\n    \"surround\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"crystalizer\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"bass\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"smart_volume\": {\n      \"enabled\": false,\n      \"level\": 74\n    },\n    \"dialog_plus\": {\n      \"enabled\": false,\n      \"level\": 50\n    }\n  },\n  \"smart_volume_mode\": \"Normal\",\n  \"eq_enabled\": false,\n  \"eq_preamp_db\": 0.0,\n  \"eq_bands_db\": {\n    \"31\": 0.0,\n    \"62\": 0.0,\n    \"125\": 2.0,\n    \"250\": 2.5,\n    \"500\": 1.5,\n    \"1k\": 2.5,\n    \"2k\": 0.0,\n    \"4k\": -2.5,\n    \"8k\": -1.0,\n    \"16k\": -1.5\n  },\n  \"mic_boost_db\": 0,\n  \"sbx_enabled\": false,\n  \"scout_mode\": false,\n  \"voice_clarity\": false,\n  \"recording\": {\n    \"noise_reduction\": false,\n    \"noise_reduction_level\": 0,\n    \"acoustic_echo_cancellation\": false,\n    \"smart_volume\": false,\n    \"mic_eq\": false\n  },\n  \"mic_eq_preset\": \"PRESET_1\",\n  \"mixer\": {\n    \"playback\": {\n      \"Speakers\": {\n        \"level_percent\": 5,\n        \"level_db\": -26.5,\n        \"muted\": false,\n        \"default\": false\n      }\n    },\n    \"recording\": {\n      \"Line In\": {\n        \"level_percent\": 100,\n        \"level_db\": -0.0,\n        \"muted\": false,\n        \"default\": false\n      }\n    },\n    \"monitoring\": {\n      \"Line In\": {\n        \"level_db\": -0.0,\n        \"muted\": null\n      },\n      \"Mystery\": {\n        \"level_db\": null,\n        \"muted\": true\n      }\n    },\n    \"speaker_layout\": \"0x1234\"\n  }\n}\n"
+  },
+  {
+   "name": "5.1, mute only",
+   "exchanges": [
+    {
+     "query": "5a070102",
+     "response": "5a0710322e312e3235303930332e31333234"
+    },
+    {
+     "query": "5a2c0101",
+     "response": "5a2c050102"
+    },
+    {
+     "query": "5a020a398100",
+     "response": null
+    },
+    {
+     "query": "5a390101",
+     "response": "5a39050120400004"
+    },
+    {
+     "query": "5a1103019702",
+     "response": "5a11080100970200000040"
+    },
+    {
+     "query": "5a6c0101",
+     "response": "5a6c030102"
+    },
+    {
+     "query": "5a020a3a00060100",
+     "response": null
+    },
+    {
+     "query": "5a3a020701",
+     "response": "5a3a0207"
+    },
+    {
+     "query": "5a1103019600",
+     "response": "5a1108010096"
+    },
+    {
+     "query": "5a1103019601",
+     "response": "5a1108010096010000003f"
+    },
+    {
+     "query": "5a1103019607",
+     "response": "5a110801009607"
+    },
+    {
+     "query": "5a1103019608",
+     "response": "5a1108010096080000003f"
+    },
+    {
+     "query": "5a1103019618",
+     "response": "5a110801009618"
+    },
+    {
+     "query": "5a1103019619",
+     "response": "5a1108010096190000003f"
+    },
+    {
+     "query": "5a1103019604",
+     "response": "5a110801009604"
+    },
+    {
+     "query": "5a1103019605",
+     "response": "5a110801009605a4703d3f"
+    },
+    {
+     "query": "5a1103019602",
+     "response": "5a110801009602"
+    },
+    {
+     "query": "5a1103019603",
+     "response": "5a1108010096030000003f"
+    },
+    {
+     "query": "5a1103019606",
+     "response": "5a110801009606"
+    },
+    {
+     "query": "5a1103019609",
+     "response": "5a110801009609"
+    },
+    {
+     "query": "5a110301960a",
+     "response": "5a11080100960a"
+    },
+    {
+     "query": "5a110301960b",
+     "response": "5a11080100960b"
+    },
+    {
+     "query": "5a110301960c",
+     "response": "5a11080100960c"
+    },
+    {
+     "query": "5a110301960d",
+     "response": "5a11080100960d00000040"
+    },
+    {
+     "query": "5a110301960e",
+     "response": "5a11080100960e00002040"
+    },
+    {
+     "query": "5a110301960f",
+     "response": "5a11080100960f0000c03f"
+    },
+    {
+     "query": "5a1103019610",
+     "response": "5a11080100961000002040"
+    },
+    {
+     "query": "5a1103019611",
+     "response": "5a110801009611"
+    },
+    {
+     "query": "5a1103019612",
+     "response": "5a110801009612000020c0"
+    },
+    {
+     "query": "5a1103019613",
+     "response": "5a110801009613000080bf"
+    },
+    {
+     "query": "5a1103019614",
+     "response": "5a1108010096140000c0bf"
+    },
+    {
+     "query": "5a3c0201",
+     "response": "5a3c04010002"
+    },
+    {
+     "query": "5a260308ffff",
+     "response": "5a260b08ffff"
+    },
+    {
+     "query": "5a1103019504",
+     "response": "5a110801009504"
+    },
+    {
+     "query": "5a1103019505",
+     "response": "5a110801009505"
+    },
+    {
+     "query": "5a1103019500",
+     "response": "5a1108010095"
+    },
+    {
+     "query": "5a110301952c",
+     "response": "5a11080100952c"
+    },
+    {
+     "query": "5a1103019513",
+     "response": "5a110801009513"
+    },
+    {
+     "query": "5a1103019514",
+     "response": "5a110801009514000040c0"
+    },
+    {
+     "query": "5a1103019515",
+     "response": "5a110801009515000080c0"
+    },
+    {
+     "query": "5a1103019516",
+     "response": "5a110801009516"
+    },
+    {
+     "query": "5a1103019517",
+     "response": "5a11080100951700000040"
+    },
+    {
+     "query": "5a1103019518",
+     "response": "5a11080100951800004040"
+    },
+    {
+     "query": "5a1103019519",
+     "response": "5a110801009519000040c0"
+    },
+    {
+     "query": "5a110301951a",
+     "response": "5a11080100951a00008040"
+    },
+    {
+     "query": "5a110301951b",
+     "response": "5a11080100951b0000a040"
+    }
+   ],
+   "endpoints": [
+    {
+     "name": "Speakers (Sound BlasterX G6)",
+     "flow": "playback",
+     "level_db": 0.0,
+     "level_percent": 0,
+     "muted": false,
+     "is_default": true
+    }
+   ],
+   "controls": [
+    {
+     "name": "SPDIF-In Mute",
+     "level_db": [],
+     "muted": true
+    }
+   ],
+   "mask": 1551,
+   "text": "Firmware      2.1.250903.1324\nOutput        Speakers\nDecoder mode  Normal\nDAC filter    Slow Roll-off / Minimum Phase\nDirect mode   On\nSPDIF direct  Off\nLine Out virt Off\nRGB light     Off\nVolume ring   Off\nSBX           Off\nScout mode    Off\nSurround      Off, 50\nCrystalizer   Off, 50\nBass          Off, 50\nSmart volume  Off, 74, Normal\nDialog+       Off, 50\nEqualizer     Off\nEQ (dB)       preamp 0 | 31:0 62:0 125:2 250:2.5 500:1.5 1k:2.5 2k:0 4k:-2.5 8k:-1 16k:-1.5\nMic boost     0 dB\nVoice clarity Off\nNoise reduct. Off, 0\nEcho cancel.  Off\nMic smart vol Off\nMic EQ        Off, PRESET_1\nPlayback vol  Speakers: 0% +0.0 dB\nMonitoring    SPDIF In: muted\nSpeaker setup 5.1 (Windows)\n",
+   "json": "{\n  \"firmware\": \"2.1.250903.1324\",\n  \"output\": \"Speakers\",\n  \"decoder_mode\": \"Normal\",\n  \"dac_filter\": \"SLOW_ROLL_OFF_MINIMUM_PHASE\",\n  \"direct_mode\": true,\n  \"spdif_direct\": false,\n  \"line_out_headphone_virtualization\": false,\n  \"rgb_enabled\": false,\n  \"ring_enabled\": false,\n  \"mode_flags\": [\n    \"0x20\",\n    \"0x40\"\n  ],\n  \"sbx\": {\n    \"surround\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"crystalizer\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"bass\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"smart_volume\": {\n      \"enabled\": false,\n      \"level\": 74\n    },\n    \"dialog_plus\": {\n      \"enabled\": false,\n      \"level\": 50\n    }\n  },\n  \"smart_volume_mode\": \"Normal\",\n  \"eq_enabled\": false,\n  \"eq_preamp_db\": 0.0,\n  \"eq_bands_db\": {\n    \"31\": 0.0,\n    \"62\": 0.0,\n    \"125\": 2.0,\n    \"250\": 2.5,\n    \"500\": 1.5,\n    \"1k\": 2.5,\n    \"2k\": 0.0,\n    \"4k\": -2.5,\n    \"8k\": -1.0,\n    \"16k\": -1.5\n  },\n  \"mic_boost_db\": 0,\n  \"sbx_enabled\": false,\n  \"scout_mode\": false,\n  \"voice_clarity\": false,\n  \"recording\": {\n    \"noise_reduction\": false,\n    \"noise_reduction_level\": 0,\n    \"acoustic_echo_cancellation\": false,\n    \"smart_volume\": false,\n    \"mic_eq\": false\n  },\n  \"mic_eq_preset\": \"PRESET_1\",\n  \"mixer\": {\n    \"playback\": {\n      \"Speakers\": {\n        \"level_percent\": 0,\n        \"level_db\": 0.0,\n        \"muted\": false,\n        \"default\": true\n      }\n    },\n    \"recording\": {},\n    \"monitoring\": {\n      \"SPDIF In\": {\n        \"level_db\": null,\n        \"muted\": true\n      }\n    },\n    \"speaker_layout\": \"5.1\"\n  }\n}\n"
+  },
+  {
+   "name": "no layout",
+   "exchanges": [
+    {
+     "query": "5a070102",
+     "response": "5a0710322e312e3235303930332e31333234"
+    },
+    {
+     "query": "5a2c0101",
+     "response": "5a2c050102"
+    },
+    {
+     "query": "5a020a398100",
+     "response": null
+    },
+    {
+     "query": "5a390101",
+     "response": "5a39050120400004"
+    },
+    {
+     "query": "5a1103019702",
+     "response": "5a11080100970200000040"
+    },
+    {
+     "query": "5a6c0101",
+     "response": "5a6c030102"
+    },
+    {
+     "query": "5a020a3a00060100",
+     "response": null
+    },
+    {
+     "query": "5a3a020701",
+     "response": "5a3a0207"
+    },
+    {
+     "query": "5a1103019600",
+     "response": "5a1108010096"
+    },
+    {
+     "query": "5a1103019601",
+     "response": "5a1108010096010000003f"
+    },
+    {
+     "query": "5a1103019607",
+     "response": "5a110801009607"
+    },
+    {
+     "query": "5a1103019608",
+     "response": "5a1108010096080000003f"
+    },
+    {
+     "query": "5a1103019618",
+     "response": "5a110801009618"
+    },
+    {
+     "query": "5a1103019619",
+     "response": "5a1108010096190000003f"
+    },
+    {
+     "query": "5a1103019604",
+     "response": "5a110801009604"
+    },
+    {
+     "query": "5a1103019605",
+     "response": "5a110801009605a4703d3f"
+    },
+    {
+     "query": "5a1103019602",
+     "response": "5a110801009602"
+    },
+    {
+     "query": "5a1103019603",
+     "response": "5a1108010096030000003f"
+    },
+    {
+     "query": "5a1103019606",
+     "response": "5a110801009606"
+    },
+    {
+     "query": "5a1103019609",
+     "response": "5a110801009609"
+    },
+    {
+     "query": "5a110301960a",
+     "response": "5a11080100960a"
+    },
+    {
+     "query": "5a110301960b",
+     "response": "5a11080100960b"
+    },
+    {
+     "query": "5a110301960c",
+     "response": "5a11080100960c"
+    },
+    {
+     "query": "5a110301960d",
+     "response": "5a11080100960d00000040"
+    },
+    {
+     "query": "5a110301960e",
+     "response": "5a11080100960e00002040"
+    },
+    {
+     "query": "5a110301960f",
+     "response": "5a11080100960f0000c03f"
+    },
+    {
+     "query": "5a1103019610",
+     "response": "5a11080100961000002040"
+    },
+    {
+     "query": "5a1103019611",
+     "response": "5a110801009611"
+    },
+    {
+     "query": "5a1103019612",
+     "response": "5a110801009612000020c0"
+    },
+    {
+     "query": "5a1103019613",
+     "response": "5a110801009613000080bf"
+    },
+    {
+     "query": "5a1103019614",
+     "response": "5a1108010096140000c0bf"
+    },
+    {
+     "query": "5a3c0201",
+     "response": "5a3c04010002"
+    },
+    {
+     "query": "5a260308ffff",
+     "response": "5a260b08ffff"
+    },
+    {
+     "query": "5a1103019504",
+     "response": "5a110801009504"
+    },
+    {
+     "query": "5a1103019505",
+     "response": "5a110801009505"
+    },
+    {
+     "query": "5a1103019500",
+     "response": "5a1108010095"
+    },
+    {
+     "query": "5a110301952c",
+     "response": "5a11080100952c"
+    },
+    {
+     "query": "5a1103019513",
+     "response": "5a110801009513"
+    },
+    {
+     "query": "5a1103019514",
+     "response": "5a110801009514000040c0"
+    },
+    {
+     "query": "5a1103019515",
+     "response": "5a110801009515000080c0"
+    },
+    {
+     "query": "5a1103019516",
+     "response": "5a110801009516"
+    },
+    {
+     "query": "5a1103019517",
+     "response": "5a11080100951700000040"
+    },
+    {
+     "query": "5a1103019518",
+     "response": "5a11080100951800004040"
+    },
+    {
+     "query": "5a1103019519",
+     "response": "5a110801009519000040c0"
+    },
+    {
+     "query": "5a110301951a",
+     "response": "5a11080100951a00008040"
+    },
+    {
+     "query": "5a110301951b",
+     "response": "5a11080100951b0000a040"
+    }
+   ],
+   "endpoints": [],
+   "controls": [],
+   "mask": null,
+   "text": "Firmware      2.1.250903.1324\nOutput        Speakers\nDecoder mode  Normal\nDAC filter    Slow Roll-off / Minimum Phase\nDirect mode   On\nSPDIF direct  Off\nLine Out virt Off\nRGB light     Off\nVolume ring   Off\nSBX           Off\nScout mode    Off\nSurround      Off, 50\nCrystalizer   Off, 50\nBass          Off, 50\nSmart volume  Off, 74, Normal\nDialog+       Off, 50\nEqualizer     Off\nEQ (dB)       preamp 0 | 31:0 62:0 125:2 250:2.5 500:1.5 1k:2.5 2k:0 4k:-2.5 8k:-1 16k:-1.5\nMic boost     0 dB\nVoice clarity Off\nNoise reduct. Off, 0\nEcho cancel.  Off\nMic smart vol Off\nMic EQ        Off, PRESET_1\n",
+   "json": "{\n  \"firmware\": \"2.1.250903.1324\",\n  \"output\": \"Speakers\",\n  \"decoder_mode\": \"Normal\",\n  \"dac_filter\": \"SLOW_ROLL_OFF_MINIMUM_PHASE\",\n  \"direct_mode\": true,\n  \"spdif_direct\": false,\n  \"line_out_headphone_virtualization\": false,\n  \"rgb_enabled\": false,\n  \"ring_enabled\": false,\n  \"mode_flags\": [\n    \"0x20\",\n    \"0x40\"\n  ],\n  \"sbx\": {\n    \"surround\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"crystalizer\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"bass\": {\n      \"enabled\": false,\n      \"level\": 50\n    },\n    \"smart_volume\": {\n      \"enabled\": false,\n      \"level\": 74\n    },\n    \"dialog_plus\": {\n      \"enabled\": false,\n      \"level\": 50\n    }\n  },\n  \"smart_volume_mode\": \"Normal\",\n  \"eq_enabled\": false,\n  \"eq_preamp_db\": 0.0,\n  \"eq_bands_db\": {\n    \"31\": 0.0,\n    \"62\": 0.0,\n    \"125\": 2.0,\n    \"250\": 2.5,\n    \"500\": 1.5,\n    \"1k\": 2.5,\n    \"2k\": 0.0,\n    \"4k\": -2.5,\n    \"8k\": -1.0,\n    \"16k\": -1.5\n  },\n  \"mic_boost_db\": 0,\n  \"sbx_enabled\": false,\n  \"scout_mode\": false,\n  \"voice_clarity\": false,\n  \"recording\": {\n    \"noise_reduction\": false,\n    \"noise_reduction_level\": 0,\n    \"acoustic_echo_cancellation\": false,\n    \"smart_volume\": false,\n    \"mic_eq\": false\n  },\n  \"mic_eq_preset\": \"PRESET_1\",\n  \"mixer\": {\n    \"playback\": {},\n    \"recording\": {},\n    \"monitoring\": {},\n    \"speaker_layout\": null\n  }\n}\n"
+  }
+ ],
+ "rounding": [
+  {
+   "value": 0.42500001192092896,
+   "percent": 43,
+   "db": 0.43
+  },
+  {
+   "value": 0.4350000023841858,
+   "percent": 44,
+   "db": 0.44
+  },
+  {
+   "value": 0.004999999888241291,
+   "percent": 0,
+   "db": 0.0
+  },
+  {
+   "value": 0.014999999664723873,
+   "percent": 1,
+   "db": 0.01
+  },
+  {
+   "value": 0.9950000047683716,
+   "percent": 100,
+   "db": 1.0
+  },
+  {
+   "value": 0.5,
+   "percent": 50,
+   "db": 0.5
+  },
+  {
+   "value": 0.0,
+   "percent": 0,
+   "db": 0.0
+  },
+  {
+   "value": 1.0,
+   "percent": 100,
+   "db": 1.0
+  },
+  {
+   "value": 0.125,
+   "percent": 12,
+   "db": 0.12
+  },
+  {
+   "value": 0.675000011920929,
+   "percent": 68,
+   "db": 0.68
+  },
+  {
+   "value": 0.9599999785423279,
+   "percent": 96,
+   "db": 0.96
+  },
+  {
+   "value": 0.7450000047683716,
+   "percent": 75,
+   "db": 0.75
+  },
+  {
+   "value": 0.375,
+   "percent": 38,
+   "db": 0.38
+  },
+  {
+   "value": -0.6050000190734863,
+   "percent": -61,
+   "db": -0.61
+  },
+  {
+   "value": -12.345000267028809,
+   "percent": -1235,
+   "db": -12.35
+  },
+  {
+   "value": 8.074999809265137,
+   "percent": 807,
+   "db": 8.07
+  },
+  {
+   "value": -26.5,
+   "percent": -2650,
+   "db": -26.5
+  },
+  {
+   "value": -0.004000000189989805,
+   "percent": 0,
+   "db": -0.0
+  },
+  {
+   "value": -0.0,
+   "percent": 0,
+   "db": -0.0
+  }
+ ],
  "dry_run": [
   {
    "argv": [
