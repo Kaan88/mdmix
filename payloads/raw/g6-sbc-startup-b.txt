@@ -1,0 +1,28 @@
+g6-sbc-startup-b.pcap - SoundBlaster Command 3.5.10.0 starting up after settings were changed, then every tab visited.
+Recorded 2026-11-24 03:03-03:05 with tools/capture_g6.ps1 (USBPcap1, G6 address 12 only), 112 s, includes audio streaming.
+Compare with g6-sbc-startup-a.pcap / .txt.
+
+Settings shown in SBC (differences from A marked *):
+  SBX Profile: * SBX master off, profile "Music"
+    * Surround 71, * Crystalizer 11, * Bass 91, * Smart Volume 0 shown (stored 0.90), * Dialog+ 6
+  * Equalizer: preset "Hip Hop" (EQ enabled per 9609)
+  * Playback: Filter "Slow Roll Off - Minimum Phase"; Speakers, Direct Mode off, 24 bit 48 kHz (unchanged)
+  Recording: unchanged (Mic Boost 0 dB)
+  * Scout Mode: on
+  * Decoder: Night
+  Mixer, Lighting (off), Settings: unchanged
+
+Decoded from the A/B diff (read 5a110301 <id> -> 5a110801 00 <id> <float32 LE>):
+  9601 surround value     0.63 -> 0.71
+  9608 crystalizer value  0.20 -> 0.11
+  9619 bass value         0.38 -> 0.91
+  9605 smart volume value 0.77 -> 0.90
+  9603 dialog+ value      (B response mis-paired by the decoder, check by hand)
+  9600 / 9607 / 9618 / 9602: 1 -> 0 (switches that follow the SBX master; 9604 stayed 1)
+  9609 EQ enable, 960a EQ preamp, 960b..9614 EQ bands 31 Hz..16 kHz.
+    The capture's request/response pairing is unreliable for these; live reads (2026-11-24 03:1x, same state) give
+    EQ off, preamp 0, bands 0 0 2 2.5 1.5 2.5 0 -2.5 -1 -1.5 ("Hip Hop"). Implemented in g6_status.
+  9702 decoder mode       2 (Normal) -> 3 (Night)
+  5a6c0101 DAC filter     -> 5a6c03 01 01 (Fast min phase) -> 01 02 (Slow min phase)
+  5a260308ffff            -> ...ffff 01 -> 02 (Scout Mode off -> on?)
+  New in B: writes 5a2605 07 ... (scout mode); added to KNOWN_WRITE_PREFIXES so they are never replayed.

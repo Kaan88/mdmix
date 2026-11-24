@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G6 GUI mockups</title>
+<style>
+/* Colours of mdshared-ui's theme.rs (DARK / LIGHT); follows the system theme. */
+:root{color-scheme:dark light;--page:#202020;--popup:#2c2c2c;--line:#424242;--text:#e6e6e6;--muted:#a3a3a3;--accent:#60cdff;--hover:#3a3a3a}
+@media (prefers-color-scheme:light){:root{--page:#fbfbfb;--popup:#fcfcfc;--line:#d5d5d5;--text:#1b1b1b;--muted:#5c5c5c;--accent:#005fb8;--hover:#e2e2e2}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text);font:13.5px/1.45 "Segoe UI Variable Text","Segoe UI",Inter,"Noto Sans",Cantarell,"DejaVu Sans",sans-serif}
+main{max-width:860px;margin:0 auto;padding:28px 20px 48px}
+h1{font-size:22px;font-weight:600;margin:0 0 6px}
+h2{font-size:15px;font-weight:600;margin:28px 0 6px}
+p{margin:0 0 10px;color:var(--muted);max-width:76ch}
+code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;color:var(--text)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:20px}
+a.card{display:flex;flex-direction:column;gap:6px;padding:14px 16px;border-radius:10px;border:1px solid var(--line);background:var(--popup);color:inherit;text-decoration:none}
+a.card:hover{background:var(--hover)}
+a.card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a.card b{font-size:15px;font-weight:600}
+a.card b span{color:var(--accent);margin-right:8px;font-size:12px;font-weight:600}
+a.card i{font-style:normal;color:var(--muted)}
+a.card em{font-style:normal;font-size:12.5px;border-top:1px solid var(--line);padding-top:8px;margin-top:auto}
+
+table{border-collapse:collapse;margin-top:8px}
+td{padding:3px 18px 3px 0;vertical-align:top}td a{color:var(--accent);text-decoration:none}td:first-child{white-space:nowrap;font-weight:600}
+li{margin-bottom:4px;max-width:76ch}
+</style>
+</head>
+<body>
+<main>
+<h1>SoundBlaster X G6: GUI mockup for the Rust rewrite</h1>
+<p>One static mockup in the look of <code>mdshared-ui</code> (markdown-shared-rs). Every control is clickable; nothing talks to a real device. Sample state: firmware 2.1.250903.1324, Speakers, Direct mode on (so SBX is shown bypassed until you turn Direct mode off).</p>
+
+<div class="grid">
+<a class="card" href="01-sbc-sidebar.html"><b><span>THE DESIGN</span>SoundBlaster X G6</b><i>The Sound Blaster Command layout: a device header with output switch, master volume and speaker setup over a list of pages; cards for each effect at the right.</i><em>open it here.</em></a>
+</div>
+
+<h2>Pages worth a look</h2>
+<table>
+<tr><td><a href="01-sbc-sidebar.html#page=sbx">SBX Acoustic Engine</a></td><td>The SBX effects as cards, with the Direct mode notice.</td></tr>
+<tr><td><a href="01-sbc-sidebar.html#page=eq">Equalizer</a></td><td>A curve with draggable points over the ten band sliders, 43 presets.</td></tr>
+<tr><td><a href="01-sbc-sidebar.html#page=mixer">Mixer</a></td><td>A live console: channel strips with level meters, faders and mutes.</td></tr>
+<tr><td><a href="01-sbc-sidebar.html#page=chain">Signal chain</a></td><td>The sound's path as stages, with Direct mode as a bypass over SBX. A stage opens its page; the switches on it apply at once.</td></tr>
+<tr><td><a href="01-sbc-sidebar.html#page=playback">Playback and decoder</a></td><td>Direct mode, decoder, DAC filter, and the speaker setup per output.</td></tr>
+</table>
+
+<h2>Design rule: every change applies at once</h2>
+<ul>
+<li>There is no preview mode and no apply step. A switch, a choice, a preset, a colour or a profile takes effect on the click.</li>
+<li>Sliders and EQ points take effect while they are dragged (throttled), and send the final value on release.</li>
+<li>A small status line says what changed ("Output: Headphones, volume 34") and offers Undo (also Ctrl+Z). The matching CLI flag is its tooltip.</li>
+<li>A volume never jumps: drag its knob, or press beside it to move one step.</li>
+<li>If a write is refused, the control springs back to the device's value and a short error shows. Try it: switch on "Writes fail" in the bar at the bottom, then change anything.</li>
+<li>Without the G6 a banner says so and the device controls are disabled. Try it: switch off "G6 connected".</li>
+<li>Speaker setup (Stereo / 5.1 / 7.1) is kept per output, Speakers and Headphones. On Windows it sets the speaker setup of the G6's playback endpoint.</li>
+</ul>
+
+<h2>The bar at the bottom of the mockup</h2>
+<table>
+<tr><td>Window backdrop</td><td>Off · Mica · Acrylic. The toolkit's only transparency setting (<code>mdshared_app::backdrop::Backdrop</code>, drawn by <code>mdshared_ui::frost</code>). It shows behind the chrome: title row, bars and side panes.</td></tr>
+<tr><td>Theme</td><td>System · Light · Dark (<code>mdshared_ui::theme</code>).</td></tr>
+<tr><td>Window corners</td><td>Square · Small · Round: 0, 4 or 8 px (<code>mdshared_ui::corners::Corners</code>).</td></tr>
+<tr><td>Window focused</td><td>Mockup only. The toolkit frosts the chrome only while the window has the keyboard.</td></tr>
+<tr><td>G6 connected</td><td>Mockup only. Off shows the app without the device.</td></tr>
+<tr><td>Writes fail</td><td>Mockup only. On shows a refused write: the control springs back.</td></tr>
+<tr><td>Wallpaper</td><td>Mockup only: three sample desktops behind the window.</td></tr>
+</table>
+<p style="margin-top:14px">The first three are also in the app: the sliders button in the title bar, or the Settings page. Details and the mapping to <code>mdshared-ui</code> widgets: <a href="README.md" style="color:var(--accent)">README.md</a>. Sources and the build script: <code>_src/</code>.</p>
+</main>
+</body>
+</html>

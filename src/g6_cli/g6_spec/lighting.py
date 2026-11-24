@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from g6_cli.g6_spec import UsbHidDataFragment, EMPTY_ADDITIONAL_PAYLOAD, DataFragmentMode
+
+LIGHTING_DISABLE_MODE = bytes.fromhex('3A02')
+LIGHTING_DISABLE_INTERMEDIATE = bytes.fromhex('0600')
+
+LIGHTING_ENABLE_PRE_1_MODE = bytes.fromhex('3A02')
+LIGHTING_ENABLE_PRE_1_INTERMEDIATE = bytes.fromhex('0601')
+
+LIGHTING_ENABLE_PRE_2_MODE = bytes.fromhex('3A06')
+LIGHTING_ENABLE_PRE_2_INTERMEDIATE = bytes.fromhex('0400')
+
+LIGHTING_ENABLE_RGB_MODE = bytes.fromhex('3A09')
+LIGHTING_ENABLE_RGB_INTERMEDIATE = bytes.fromhex('0A00')
+LIGHTING_ENABLE_RGB_AUDIO_FEATURE = bytes.fromhex('03')
+
+# Volume ring light (bright white LED under the volume knob).
+# Reverse-engineered from USBPcap captures. Command 0x0e, byte[5]: 0x00=on, 0x01=off.
+LIGHTING_VOLUME_RING_MODE = bytes.fromhex('3903')
+LIGHTING_VOLUME_RING_INTERMEDIATE = bytes.fromhex('000e')
+LIGHTING_VOLUME_RING_COMMIT_MODE = bytes.fromhex('3901')
+LIGHTING_VOLUME_RING_COMMIT_INTERMEDIATE = bytes.fromhex('0100')
+
+
+def lighting_disable() -> list[UsbHidDataFragment]:
+    """
+    Disable the RGB lighting on the G6 device.
+    :return: The list of UsbHidDataFragment objects to send to the G6, to disable the RGB lighting.
+    """
+    return [
+        UsbHidDataFragment(
+            mode=LIGHTING_DISABLE_MODE,
+            intermediate=LIGHTING_DISABLE_INTERMEDIATE,
+            audio_feature=bytes.fromhex('00'),
+            value=bytes.fromhex('0000 0000'),
+            additional_payload=EMPTY_ADDITIONAL_PAYLOAD,
+        )
+    ]
+
+
+def lighting_volume_ring(enable: bool) -> list[UsbHidDataFragment]:
+    """
+    Enable or disable the volume ring light (bright white LED under the volume knob).
+    This is independent from the RGB accent light controlled by lighting_disable/lighting_enable_set_rgb.
+    :param enable: True to enable the volume ring light, False to disable it.
+    :return: The list of UsbHidDataFragment objects to send to the G6.
+    """
+    return [
+        UsbHidDataFragment(
+            mode=LIGHTING_VOLUME_RING_MODE,
+            intermediate=LIGHTING_VOLUME_RING_INTERMEDIATE,
+            audio_feature=bytes.fromhex('00') if enable else bytes.fromhex('01'),
+            value=bytes.fromhex('00000000'),
+            additional_payload=EMPTY_ADDITIONAL_PAYLOAD,
+        ),
+        UsbHidDataFragment(
+            mode=LIGHTING_VOLUME_RING_COMMIT_MODE,
+            intermediate=LIGHTING_VOLUME_RING_COMMIT_INTERMEDIATE,
+            audio_feature=bytes.fromhex('00'),
+            value=bytes.fromhex('00000000'),
+            additional_payload=EMPTY_ADDITIONAL_PAYLOAD,
+        ),
+    ]
+
+
+def lighting_enable_set_rgb(red: int, green: int, blue: int) -> list[UsbHidDataFragment]:
+    """
+    Set the RGB lighting on the G6 device to the specified color.
+    :param red: The red component of the color (0..255).
+    :param green: The green component of the color (0..255).
+    :param blue: The blue component of the color (0..255).
+    :return: The list of UsbHidDataFragment objects to send to the G6, to set the RGB lighting to the specified color.
+    """
+    if red < 0 or red > 255:
+        raise ValueError(f"red must be between 0 and 255, got {red}")
+    if green < 0 or green > 255:
+        raise ValueError(f"green must be between 0 and 255, got {green}")
+    if blue < 0 or blue > 255:
+        raise ValueError(f"blue must be between 0 and 255, got {blue}")
+
+    usb_hid_fragment_list: list[UsbHidDataFragment] = []
+    for i in range(3):
+        usb_hid_fragment_list.append(
+            UsbHidDataFragment(
+                mode=LIGHTING_ENABLE_PRE_1_MODE,
+                intermediate=LIGHTING_ENABLE_PRE_1_INTERMEDIATE,
+                audio_feature=bytes.fromhex('00'),
+                value=bytes.fromhex('0000 0000'),
+                additional_payload=EMPTY_ADDITIONAL_PAYLOAD
+            )
+        )
+        usb_hid_fragment_list.append(
+            UsbHidDataFragment(
+                mode=LIGHTING_ENABLE_PRE_2_MODE,
+                intermediate=LIGHTING_ENABLE_PRE_2_INTERMEDIATE,
+                audio_feature=LIGHTING_ENABLE_RGB_AUDIO_FEATURE,
+                value=bytes.fromhex('0100 0100'),
+                additional_payload=EMPTY_ADDITIONAL_PAYLOAD
+            )
+        )
+        usb_hid_fragment_list.append(_colour_fragment(red, green, blue, 255))
+
+    return usb_hid_fragment_list
+
+
+def _check_byte(name: str, value: int) -> None:
+    if value < 0 or value > 255:
+        raise ValueError(f"{name} must be between 0 and 255, got {value}")
+
+
+def _colour_fragment(red: int, green: int, blue: int, brightness: int) -> UsbHidDataFragment:
+    # 5a3a09 0a00 03 0101 <brightness> <blue> <green> <red>
+    return UsbHidDataFragment(
+        mode=LIGHTING_ENABLE_RGB_MODE,
+        intermediate=LIGHTING_ENABLE_RGB_INTERMEDIATE,
+        audio_feature=LIGHTING_ENABLE_RGB_AUDIO_FEATURE,
+        value=bytes.fromhex('0101' + format(brightness, '02x') + format(blue, '02x')),
+        additional_payload=bytes.fromhex(format(green, '02x') + format(red, '02x') + ''.zfill(104)),
+    )
+
+
+def lighting_frame(red: int, green: int, blue: int, brightness: int = 255) -> list[UsbHidDataFragment]:
+    """
+    One animation frame, exactly as SoundBlaster Command streams it for its lighting effects
+    (5a3a020601, 5a3a06040003010001, 5a3a090a00030101 <brightness> <b> <g> <r>; g6-sbc-session-c).
+    lighting_enable_set_rgb sends the same three reports three times, with the brightness byte fixed to 0xff.
+    """
+    for name, value in (('red', red), ('green', green), ('blue', blue), ('brightness', brightness)):
+        _check_byte(name, value)
+    return lighting_enable_set_rgb(red, green, blue)[:2] + [_colour_fragment(red, green, blue, brightness)]

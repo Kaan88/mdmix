@@ -4,9 +4,27 @@
 Linux.** It's an alternative to Sound Blaster Command: one small native app, no account, no background
 services, no telemetry.
 
-> **Status: in development.** This repository holds the Rust rewrite, and there's no release yet. The protocol
-> work it builds on is done and already works as a Python CLI and GUI (see [Where it comes from](#where-it-comes-from)).
-> mdmix is unofficial and not affiliated with, endorsed by or supported by Creative Technology Ltd.
+> **Status: in development.** The Rust app described below has no release yet. What works today is the Python
+> CLI and GUI in this repository ([Use it today](#use-it-today)). mdmix is unofficial and not affiliated with,
+> endorsed by or supported by Creative Technology Ltd.
+
+## Use it today
+
+The Python version can already set and read back nearly everything listed below, from a command line or a simple GUI.
+It runs on Windows and Linux and needs Python 3.12+:
+
+```shell
+git clone https://github.com/Kaan88/mdmix && cd mdmix
+python -m venv venv
+pip install -e ".[gui]"
+g6 --status                 # read everything back from the G6
+g6 --eq Enabled --eq-preset Acoustic   # an SBC preset, for the current output
+soundblaster-x-g6-gui
+```
+
+Activate the venv before `pip install`: `venv\Scripts\activate` on Windows, `. venv/bin/activate` on Linux.
+Linux needs a udev rule first. The full guide, with every flag and what each one does, is in
+[doc/python.md](doc/python.md).
 
 ## What it does
 
@@ -64,8 +82,11 @@ risk.
 - The USB protocol was reverse-engineered by Nils Skowasch in
   [soundblaster-x-g6-cli](https://github.com/nils-skowasch/soundblaster-x-g6-cli). It was worked out from
   Wireshark / USBPcap captures.
-- A fork of that project added the GUI, status read-back, EQ presets, lighting effects, profiles and a hardware-free
-  test suite. That Python code is the reference this Rust version is tested against.
+- This repository continues that project, with its full history. It adds the GUI, status read-back, EQ presets,
+  lighting effects, profiles and a hardware-free test suite. That Python code (`src/g6_cli`) is the reference the
+  Rust version is tested against: `tests/vectors/` records exactly what it sends.
+- Design and plans: the [GUI mockup](doc/mockups/01-sbc-sidebar.html), the [GUI plan](doc/gui-plan.md), the
+  [Rust port plan](doc/rust-port.md) and the [USB protocol notes](doc/usb-spec.md).
 
 ## Licence
 

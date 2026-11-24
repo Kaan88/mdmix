@@ -1,3 +1,20 @@
+.idea/
+.vscode/
+venv/
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+# local leftovers kept out of the repo
+legacy/hidapi_014/
+# capture-script side files (tools/capture_g6.ps1)
+*.pcap.log
+*.pcap.started
+
+# Rust
 /target
+/rust/target
 *.pdb
 .cargo/config.local.toml

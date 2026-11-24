@@ -1,0 +1,45 @@
+g6-sbc-session-c.pcap - SoundBlaster Command 3.5.10.0, one setting changed at a time, each step marked.
+Recorded 2026-11-24 with tools/capture_g6.ps1 (G6 address only). Markers: g6-sbc-session-c.pcap.markers
+(epoch seconds + label, written with tools/mark.ps1; split with tools/split_by_markers.py).
+Trimmed: isochronous (audio stream) packets were dropped; the decoded HID/UAC events are identical to the
+original 65 MB capture (only packet numbers differ).
+
+Start state = end state of g6-sbc-startup-b (Scout Mode on, EQ off "Hip Hop", Desktop speakers, lighting off).
+Every change was restored at the end.
+
+Decoded (all writes are 5a ... reports on interface 4; "->" is the answer):
+
+SBX master / Scout Mode (mode register)
+  write  5a2605 07 <01 SBX | 02 Scout> 00 <01 on | 00 off>, then SBC reads 5a260308ffff
+  answer 5a260b08ffff <mask>: 0x01 SBX, 0x02 Scout Mode, 0x04 Voice Clarity (0x00 with Direct mode on)
+  SBX and Scout exclude each other: the SBX click is ignored while Scout is on (marker 2).
+  SBC also re-sends the per-effect values (9600..9619) after the switch.
+  -> g6_spec/modes.py, --sbx, --scout-mode, status sbx_enabled / scout_mode / voice_clarity
+
+Equalizer (same scheme as the SBX sliders, group 0x96)
+  9609 enable (1.0/0.0), 960a preamp dB, 960b..9614 bands 31 Hz..16 kHz in dB.
+  Presets (Rock, Hip Hop) are app-side: SBC writes all 11 values.
+  -> g6_spec/equalizer.py, --eq, --eq-preamp, --eq-band FREQ DB
+
+Recording effects (group 0x95; switches 1.0/0.0)
+  9504 Noise Reduction (the old --recording-voice-clarity switch writes this one), 9505 NR level 0..1
+  9500 AEC, 952c mic Smart Volume, 9513 Mic EQ, 9514..951b mic EQ bands (preset values, dB)
+  Voice Clarity itself has no write: SBC turns it off when the last effect is unchecked (mask bit 0x04).
+  Segments 10, 11 and 13 are UNRELIABLE for that reason (see markers); 15-20 are one change each.
+  -> status recording / mic_eq_preset (readback only; setters existed)
+  Found here: MicrophoneEqualizerPreset PRESET_1/PRESET_2 band 0x17 was '0000 4000' (~0 dB) in the spec,
+  the mic-eq-preset captures and the device say '0000 0040' (2.0 dB). Fixed.
+
+Headphone virtualization to Line Out (Speaker configuration dialog checkbox)
+  5a3903 00 0a 01 on / 5a3903 00 0a 00 off, same family as Direct mode (05) and SPDIF direct (0d).
+  SBC re-sends the headphone SBX values afterwards.
+  -> --playback-line-out-headphone-virtualization
+
+LED indicator (= volume ring light): 5a3903 00 0e 00 on, 01 off (inverted). Already covered by the ring setter.
+Output switch: 5a2c05 00 04 headphones / 00 02 speakers -> 5a2c0501 <code>. Already covered.
+
+No device traffic (app-side only):
+  Speaker type Desktop/Bookshelf (markers 21, 22).
+  Lighting effects Solo / Pulsate / Cycle / Music Reactive and their speed: SBC animates them itself by
+  streaming colour writes (5a3a02 / 06 / 09) about 20 times a second; the device stores no effect.
+  Headphone gain: hardware switch only, the headphones dialog has no gain setting.

@@ -1,0 +1,37 @@
+1795479892.537	idle baseline
+1795479906.569	sbx master on
+1795479917.181	sbx master click ignored (scout on); next: scout off
+1795479971.78	scout off
+1795479988.21	sbx master toggle 1
+1795479997.441	sbx master toggle 2 (on)
+1795480010.12	eq on
+1795480029.951	eq preset rock
+1795480059.01	eq preset hip hop (restore)
+1795480067.566	eq off (restore)
+1795480086.37	recording seq @4s: VC on, NR on, NR off, AEC on, AEC off, SmartVol on, SmartVol off, MicEQ on, MicEQ off, VC off
+1795480140.792	recording seq above is UNRELIABLE (VC turned off mid-way). state now: VC on, boxes unchecked. next: NR on
+1795480149.74	NR off
+1795480162.1	VC on, then +4s AEC on
+1795480176.619	segment above UNRELIABLE (ended VC off, all unchecked). next: VC on alone
+1795480188.685	AEC on
+1795480198.168	mic SmartVol on
+1795480206.188	AEC off
+1795480214.894	MicEQ on
+1795480223.078	mic SmartVol off
+1795480232.819	MicEQ off (VC auto off, restored)
+1795480253.261	speaker type bookshelf (click), +4s Done
+1795480275.091	speaker type desktop (restore) click, +4s HP-virt-to-lineout checkbox ON, +4s Done
+1795480293.069	open dialog, +3s HP-virt-to-lineout checkbox OFF, +4s Done (restore)
+1795480310.375	lighting on
+1795480323.531	colour blue swatch, +4s red swatch (restore)
+1795480345.238	effect solo
+1795480354.29	effect pulsate
+1795480382.266	pulsate speed fastest (was slower)
+1795480398.883	pulsate speed slower (restore)
+1795480414.27	effect cycle
+1795480430.859	effect music reactive (restore), +5s lighting off (restore)
+1795480456.063	LED indicator on, +5s off (restore)
+1795480477.323	output headphones
+1795480494.761	output speakers (restore)
+1795480508.05	scout on (restore)
+1795480523.479	end
