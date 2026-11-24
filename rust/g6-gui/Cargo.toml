@@ -1,0 +1,37 @@
+[package]
+name = "g6-gui"
+version = "0.1.0"
+description = "The Sound BlasterX G6 control panel, drawn with mdshared-ui. Step G2: it reads the device and shows every page; nothing writes yet."
+edition.workspace = true
+license = "GPL-2.0-only"
+publish = false
+rust-version.workspace = true
+
+[[bin]]
+name = "g6-gui"
+path = "src/main.rs"
+
+[dependencies]
+g6-proto = { path = "../g6-proto" }
+g6-device = { path = "../g6-device" }
+g6-osaudio = { path = "../g6-osaudio" }
+# The toolkit (markdown-shared-rs), pinned to one commit like mdview and mdedit pin it. For work on both
+# sides at once, a local [patch] goes in `.cargo/config.local.toml`, which git ignores.
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }
+
+[target.'cfg(windows)'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+softbuffer = { version = "=0.4.8", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+softbuffer = { version = "=0.4.8", default-features = false, features = ["x11", "wayland", "wayland-dlopen"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+softbuffer = { version = "=0.4.8", default-features = false }
+
+[dev-dependencies]
+serde_json.workspace = true
