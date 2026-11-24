@@ -25,7 +25,7 @@ keywords = ["SoundBlaster X G6", "Creative", "USB HID", "CLI"]
 
 [project.optional-dependencies]
 gui = ["customtkinter>=5.2"]
-test = ["pytest>=8"]
+test = ["pytest>=9.2.0"]
 
 [project.scripts]
 soundblaster-x-g6-cli = "g6_cli:cli_entry"
