@@ -18,7 +18,7 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Decoder mode (Normal/Full/Night) | ✅ | ✅ | HID | confirmed Normal→Night in g6-sbc-startup-a/b |
 | SBX Surround on/off + level | ✅ | ✅ | HID | `5a110301 96<id>` float32, ids = `AudioFeature` |
 | SBX Crystalizer on/off + level | ✅ | ✅ | HID | as above |
-| SBX Bass on/off + level | ✅ | ✅ | HID | as above; `9617` = 80.0 is probably the bass crossover (Hz), unconfirmed |
+| SBX Bass on/off + level | ✅ | ✅ | HID | as above. `9617` = 80.0 is the bass crossover in Hz (confirmed): SBC's profiles store `"Bass": {…, "XOver": 80, "SubWooferGain": false}` (all 64 at 80), the G6 DLL has `XBassCrossOverFrequencyEffectParameterId` and custom min/max, and in g6-sbc-session-c SBC writes `5a1207 0196 17 0000a042` (80.0) when it reloads the headphone settings on an output switch. The crossover control only appears for speaker setups with a subwoofer, which the G6 doesn't have, so SBC never sends anything but 80; no setter (any other value would be a guess) |
 | SBX Smart Volume on/off + level + Night/Loud | ✅ | ✅ | HID | mode = `9606` (0 Normal, 1 Loud, 2 Night) |
 | SBX Dialog+ on/off + level | ✅ | ✅ | HID | as above |
 | SBX master switch | ✅ | ✅ | HID | write `5a2605 07 01 00 <on>`; mode register `5a260308ffff` → bit 0x01 (g6-sbc-session-c). Excludes Scout Mode |
@@ -37,7 +37,7 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Mic monitoring volume / mute | ✅ | 🟡 | UAC | as above (playback-path topology parts: Microphone = External Mic) |
 | Mixer monitoring / recording sources | ✅ | 🟡 | UAC | as above; Auxiliary = Line In; SPDIF In's level part is named "External Input Recording Mute" by the driver (unconfirmed) |
 | Speaker layout (stereo / 5.1 / 7.1) | ✅ | 🟡 | UAC | Windows: the speaker setup of the playback endpoint (`PKEY_AudioEndpoint_PhysicalSpeakers` channel mask, `0x3` = Stereo); a driver setting, not a device register. Linux: ❌ |
-| Speaker type (desktop / bookshelf) | – | – | – | app-side: no USB traffic when changed (g6-sbc-session-c) |
+| Speaker type (desktop / bookshelf) | – | – | – | app-side only: no write at all between the Bookshelf and Desktop clicks in g6-sbc-session-c (the next write is the Line Out checkbox), and SBC stores it in none of its files. It's a label in SBC's speaker dialog, nothing reaches the G6 |
 | Headphone virtualization to Line Out | ✅ | ✅ | HID | `5a3903 00 0a <01/00>` (Direct-mode family); readback = flags byte B bit 0x04 (snapshot diff: `5a39050120400004` off, `…20440004` on) |
 | Graphic equalizer on/off, preamp, 10 bands | ✅ | ✅ | HID | `5a1207 0196 <09 / 0a / 0b–14> <float32>` + commit, confirmed in g6-sbc-session-c |
 | EQ presets | ✅ | via the bands | HID | app-side: `--eq-preset NAME` writes preamp + 10 bands from SBC's own preset files (`%ProgramData%/Creative/SBCommand/Product/G6/Presets/EQ`, 43 presets, separate speaker/headphone curves; Rock and Hip Hop match g6-sbc-session-c). The G6 stores no preset name |
