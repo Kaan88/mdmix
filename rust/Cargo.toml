@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["g6-proto"]
+members = ["g6-proto", "g6-cli"]
 
 [workspace.package]
 edition = "2024"
