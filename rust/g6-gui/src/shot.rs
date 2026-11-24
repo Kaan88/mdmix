@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_written_to_the_output_path_before_the_render_works() {
+    fn an_unwritable_output_path_is_an_error_not_a_panic() {
         let a = ShotArgs {
             out: Some(PathBuf::from("")),
             ..ShotArgs::new(Page::Sbx, false)

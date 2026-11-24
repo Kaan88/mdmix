@@ -14,7 +14,7 @@ use crate::icons;
 use crate::kit::{
     self, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, dimmed, live_seg, row, seg, value,
 };
-use crate::model::{MixerView, Model, Page, Strip};
+use crate::model::{MONITORING, MixerView, Model, Page, RECORDING, Strip};
 use crate::prefs::{Prefs, Theme};
 use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::corners::Corners;
@@ -359,14 +359,34 @@ fn eq_bands(
     debug_assert_eq!(EQ_BAND_FREQS.len(), 10);
 }
 
+/// What the speaker setup rows say about where their selection comes from.
+fn layout_note(m: &Model) -> String {
+    let layout = m.mixer.as_ref().and_then(|v| v.speaker_layout.as_deref());
+    match layout {
+        Some(l) if m.mixer.as_ref().and_then(MixerView::layout_index).is_none() => {
+            format!("Kept per output. Windows has the output set to {l}, which is none of these.")
+        }
+        Some(_) => "Kept per output. The choice shown is the one Windows has for the output in use; the other output's isn't read.".into(),
+        None => "Kept per output. The speaker setup is read from Windows; it isn't known here, so none is chosen.".into(),
+    }
+}
+
 // ---- Playback and decoder ----------------------------------------------------------------------
 
 fn playback(m: &Model) -> Vec<Card<'static>> {
     let s = &m.status;
     let out_idx = facts::output_index(s);
+    // Windows' speaker setup belongs to the output in use; the other output's isn't read.
+    let layout_now = m.mixer.as_ref().and_then(MixerView::layout_index);
     let layout_row = |i: usize| {
         let name = facts::OUTPUTS[i];
-        let r = row(name, seg(&facts::LAYOUTS, None));
+        let r = row(
+            name,
+            seg(
+                &facts::LAYOUTS,
+                if out_idx == Some(i) { layout_now } else { None },
+            ),
+        );
         if out_idx == Some(i) {
             r.badge("In use", Tone::Quiet)
         } else {
@@ -375,7 +395,16 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
         .item()
     };
     let dec = facts::index_of(&facts::DECODER_MODES, s.decoder_mode.as_deref());
-    let filter = facts::filter_label(s).unwrap_or_else(|| DASH.into());
+    let unreported = |v: Option<String>| {
+        v.unwrap_or_else(|| {
+            if m.direct() {
+                facts::NOT_REPORTED.into()
+            } else {
+                DASH.into()
+            }
+        })
+    };
+    let filter = unreported(facts::filter_label(s));
     let mut decoder = vec![
         row("Dynamic range", seg(&facts::DECODER_MODES, dec))
             .help("For Dolby Digital input.")
@@ -384,7 +413,8 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
     ];
     if m.direct() && (s.decoder_mode.is_none() || s.dac_filter.is_none()) {
         decoder.push(Item::Note(
-            "The G6 reports no decoder mode or filter while Direct mode is on.".into(),
+            "The G6 reports no decoder mode or filter while Direct mode is on, so none is shown."
+                .into(),
         ));
     }
     vec![
@@ -405,7 +435,7 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
                 Item::Sub("Speaker setup".into()),
                 layout_row(0),
                 layout_row(1),
-                Item::Note("Kept per output. The G6 gives no read-back of the speaker setup yet, so none is chosen.".into()),
+                Item::Note(layout_note(m)),
             ],
         ),
         Card::new("Decoder", decoder),
@@ -428,9 +458,6 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
 }
 
 // ---- Mixer -------------------------------------------------------------------------------------
-
-const MONITORING: [&str; 4] = ["Line In", "External Mic", "SPDIF In", "Mic"];
-const RECORDING: [&str; 5] = ["Line In", "External Mic", "SPDIF In", "What U Hear", "Mic"];
 
 fn mixer(m: &Model) -> Vec<Card<'static>> {
     let s = &m.status;
@@ -469,13 +496,17 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
             "Output and inputs",
             vec![
                 row("Output", seg(&facts::OUTPUTS, facts::output_index(s))).item(),
-                row("Speaker setup", seg(&facts::LAYOUTS, None)).item(),
+                row(
+                    "Speaker setup",
+                    seg(&facts::LAYOUTS, mx.as_ref().and_then(MixerView::layout_index)),
+                )
+                .item(),
                 row("Mic boost (dB)", seg(&facts::MIC_BOOSTS, facts::mic_boost_index(s))).item(),
                 toggle_row("Direct mode", s.direct_mode).item(),
                 Item::Note(if m.mixer.is_some() {
-                    "Levels and mutes are the Windows ones (Core Audio).".into()
+                    "Levels and mutes are the Windows ones (Core Audio). Monitoring strips only have a level in dB, so their faders have no position.".into()
                 } else {
-                    "Levels and mutes are the Windows ones (Core Audio). They show — until they are read from it.".into()
+                    "Levels and mutes are the Windows ones (Core Audio). They show — because Windows gave none. Monitoring strips only have a level in dB.".into()
                 }),
             ],
         )
@@ -531,6 +562,7 @@ fn strips_rack(
             x += meter_w + gap;
         }
         let vol = st.and_then(|s| s.volume);
+        let db = st.and_then(|s| s.db);
         vslider(
             p,
             &dim,
@@ -539,7 +571,11 @@ fn strips_rack(
             false,
             pal.popup,
         );
-        let reading = vol.map_or(DASH.to_string(), |v| v.to_string());
+        let reading = match (vol, db) {
+            (Some(v), _) => v.to_string(),
+            (None, Some(d)) => facts::db_short(d),
+            (None, None) => DASH.to_string(),
+        };
         let (face, size) = if wide {
             (Face::Semibold, 16.0)
         } else {
@@ -564,6 +600,24 @@ fn strips_rack(
     }
 }
 
+fn strip_slider(st: Option<Strip>) -> Ctl {
+    let v = st.and_then(|s| s.volume);
+    Ctl::Slider {
+        frac: v.map(|v| f32::from(v) / 100.0),
+        reading: v.map_or(DASH.into(), |v| v.to_string()),
+        from_middle: false,
+    }
+}
+
+/// A monitoring level is in dB with no known range, so the reading says it and the knob has no place.
+fn db_slider(st: Option<Strip>) -> Ctl {
+    Ctl::Slider {
+        frac: None,
+        reading: st.and_then(|s| s.db).map_or(DASH.into(), facts::db),
+        from_middle: false,
+    }
+}
+
 // ---- Microphone --------------------------------------------------------------------------------
 
 fn microphone(m: &Model) -> Vec<Card<'static>> {
@@ -571,6 +625,8 @@ fn microphone(m: &Model) -> Vec<Card<'static>> {
     let rec = s.recording.unwrap_or_default();
     let vc_off = s.voice_clarity == Some(false);
     let mic_eq = rec.mic_eq;
+    let rec_mic = m.mixer.as_ref().map(|v| v.recording[1]);
+    let mon_mic = m.mixer.as_ref().map(|v| v.monitoring[1]);
     let mut preset_row = row(
         "Mic EQ preset",
         Ctl::Dropdown(facts::mic_eq_label(s).unwrap_or_else(|| DASH.into())),
@@ -584,11 +640,11 @@ fn microphone(m: &Model) -> Vec<Card<'static>> {
             "Microphone",
             vec![
                 row("Mic boost (dB)", seg(&facts::MIC_BOOSTS, facts::mic_boost_index(s))).item(),
-                row("Recording volume", Ctl::Slider { frac: None, reading: DASH.into(), from_middle: false }).item(),
-                toggle_row("Mute recording", None).item(),
-                row("Monitoring volume", Ctl::Slider { frac: None, reading: DASH.into(), from_middle: false }).item(),
-                toggle_row("Mute monitoring", None).item(),
-                Item::Note("Monitoring plays the microphone back on the output. Volumes and mutes show — until they are read from Windows.".into()),
+                row("Recording volume", strip_slider(rec_mic)).item(),
+                toggle_row("Mute recording", rec_mic.and_then(|s| s.muted)).item(),
+                row("Monitoring volume", db_slider(mon_mic)).item(),
+                toggle_row("Mute monitoring", mon_mic.and_then(|s| s.muted)).item(),
+                Item::Note("Monitoring plays the microphone back on the output. Volumes and mutes are Windows' (the External Mic); they show — when Windows gave none, and the monitoring level is in dB.".into()),
             ],
         ),
         Card::new(
@@ -689,6 +745,11 @@ fn dl(label: &str, text: impl Into<String>) -> Item {
 }
 
 pub fn device_rows(s: &DeviceStatus) -> Vec<(&'static str, String)> {
+    let gone = if s.direct_mode == Some(true) {
+        facts::NOT_REPORTED
+    } else {
+        DASH
+    };
     vec![
         (
             "Firmware",
@@ -699,11 +760,11 @@ pub fn device_rows(s: &DeviceStatus) -> Vec<(&'static str, String)> {
         ("SPDIF-Out Direct", facts::on_off(s.spdif_direct)),
         (
             "Decoder mode",
-            s.decoder_mode.clone().unwrap_or_else(|| DASH.into()),
+            s.decoder_mode.clone().unwrap_or_else(|| gone.into()),
         ),
         (
             "DAC filter",
-            facts::filter_label(s).unwrap_or_else(|| DASH.into()),
+            facts::filter_label(s).unwrap_or_else(|| gone.into()),
         ),
         ("SBX", facts::on_off(s.sbx_enabled)),
         ("Scout Mode", facts::on_off(s.scout_mode)),
@@ -874,6 +935,7 @@ fn playback_nodes(m: &Model) -> Vec<Node> {
         Some(Strip {
             volume: Some(v),
             muted,
+            ..
         }) if muted != Some(true) => format!("Volume {v}"),
         Some(Strip {
             muted: Some(true), ..
@@ -914,8 +976,25 @@ fn playback_nodes(m: &Model) -> Vec<Node> {
     ]
 }
 
+/// A stage's second line from a strip: "Muted", "Volume 80", "-9 dB", or "Volume —" when Windows gave none.
+fn strip_sub(st: Option<Strip>, db: bool) -> String {
+    match st {
+        Some(Strip {
+            muted: Some(true), ..
+        }) => "Muted".into(),
+        Some(Strip {
+            volume: Some(v), ..
+        }) if !db => format!("Volume {v}"),
+        Some(Strip { db: Some(d), .. }) if db => facts::db(d),
+        _ => "Volume —".into(),
+    }
+}
+
 fn mic_nodes(m: &Model) -> Vec<Node> {
     let s = &m.status;
+    // Recording and monitoring of the External Mic, the microphone input of the chain.
+    let rec_mic = m.mixer.as_ref().map(|v| v.recording[1]);
+    let mon_mic = m.mixer.as_ref().map(|v| v.monitoring[1]);
     let rec = s.recording.unwrap_or_default();
     let vc = s.voice_clarity == Some(true);
     let more = [rec.acoustic_echo_cancellation, rec.smart_volume, rec.mic_eq]
@@ -953,9 +1032,37 @@ fn mic_nodes(m: &Model) -> Vec<Node> {
             Some(Page::Microphone),
         )
         .sw(s.voice_clarity),
-        node("Recording", "Volume —", Light::Live, Some(Page::Mixer)),
-        node("Monitoring", "Volume —", Light::Idle, Some(Page::Mixer)),
-        node("Mixer", "Levels —", Light::Live, Some(Page::Mixer)).icon(icons::MIXER),
+        node(
+            "Recording",
+            strip_sub(rec_mic, false),
+            if rec_mic.and_then(|s| s.muted) == Some(true) {
+                Light::Off
+            } else {
+                Light::Live
+            },
+            Some(Page::Mixer),
+        ),
+        node(
+            "Monitoring",
+            strip_sub(mon_mic, true),
+            if mon_mic.and_then(|s| s.muted) == Some(false) {
+                Light::Live
+            } else {
+                Light::Idle
+            },
+            Some(Page::Mixer),
+        ),
+        node(
+            "Mixer",
+            match m.mixer.as_ref().map(|v| (v.mix_muted, v.master.volume)) {
+                Some((Some(true), _)) => "Mix muted".into(),
+                Some((_, Some(v))) => format!("Master {v}"),
+                _ => "Levels —".into(),
+            },
+            Light::Live,
+            Some(Page::Mixer),
+        )
+        .icon(icons::MIXER),
     ]
 }
 

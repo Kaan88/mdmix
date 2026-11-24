@@ -37,6 +37,25 @@ impl Hits {
         self.0.push((hit, r));
     }
 
+    /// How many regions there are; a mark for `clip_from`.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The regions added since `start` are only where `view` is: each is cut to it, and one entirely outside it is
+    /// dropped. A page that scrolls draws its controls where they would be; the part scrolled out of sight is not
+    /// there to be hit.
+    pub fn clip_from(&mut self, start: usize, view: Rect) {
+        let tail = self.0.split_off(start.min(self.0.len()));
+        for (hit, r) in tail {
+            let (x0, y0) = (r.x.max(view.x), r.y.max(view.y));
+            let (x1, y1) = (r.right().min(view.right()), r.bottom().min(view.bottom()));
+            if x1 > x0 && y1 > y0 {
+                self.0.push((hit, Rect::new(x0, y0, x1 - x0, y1 - y0)));
+            }
+        }
+    }
+
     pub fn at(&self, x: f32, y: f32) -> Option<Hit> {
         self.0
             .iter()

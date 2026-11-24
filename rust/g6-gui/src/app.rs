@@ -93,8 +93,6 @@ struct App {
     last_click: Option<(Instant, (f32, f32), u8)>,
     dialog: Option<Form>,
     toast: Option<(String, Instant)>,
-    /// A read the user asked for is out; its result gets a toast.
-    toast_on_read: bool,
     drawn_once: bool,
 }
 
@@ -125,7 +123,6 @@ impl App {
             last_click: None,
             dialog: None,
             toast: None,
-            toast_on_read: false,
             drawn_once: false,
         }
     }
@@ -153,30 +150,31 @@ impl App {
 
     /// Asks the worker for a status read. `user` says a person asked, so the result is announced.
     fn ask_read(&mut self, user: bool) {
-        self.toast_on_read = user;
         if !self.model.have_status || matches!(self.model.conn, Conn::Away(_)) {
             self.model.conn = Conn::Reading;
         }
-        if !self.worker.ask(Cmd::Read) {
+        if !self.worker.ask(Cmd::Read { user }) {
             self.model.conn = Conn::Away("The device worker is not running.".into());
         }
+        self.sync_dialog();
     }
 
     fn read_done(&mut self, r: ReadResult) {
-        let ok = r.is_ok();
-        let why = r.as_ref().err().cloned();
-        self.model.apply(r);
+        let why = r.status.as_ref().err().cloned();
+        self.model.apply(r.status, r.mixer);
+        self.sync_dialog();
+        // The result says what it answers: a read the user asked for, merged or not.
+        if r.user {
+            self.say(why.unwrap_or_else(|| "Status read from the G6.".into()));
+        }
+        self.redraw();
+    }
+
+    /// The dialog's Device page shows the model, so it is rebuilt when the model changes.
+    fn sync_dialog(&mut self) {
         if let Some(f) = &mut self.dialog {
             f.set_pages(dialog::pages(&self.prefs, &self.model));
         }
-        if std::mem::take(&mut self.toast_on_read) {
-            match why {
-                None if ok => self.say("Status read from the G6."),
-                Some(w) => self.say(w),
-                None => {}
-            }
-        }
-        self.redraw();
     }
 
     // ---- window ------------------------------------------------------------------------------
@@ -462,12 +460,17 @@ impl App {
     }
 
     fn quit(&mut self, event_loop: &ActiveEventLoop) {
+        // A minimised window reports a size of 0 or the icon's: only a normal window's size is kept, and only if it
+        // is one the window can have.
         if let Some(w) = &self.window
             && !w.is_maximized()
+            && w.is_minimized() != Some(true)
         {
             let s = w.inner_size().to_logical::<f64>(w.scale_factor());
             let size = (s.width.round() as u32, s.height.round() as u32);
-            self.prefs.size = Some(size).filter(|&(w, h)| w >= prefs::MIN.0 && h >= prefs::MIN.1);
+            if size.0 >= prefs::MIN.0 && size.1 >= prefs::MIN.1 {
+                self.prefs.size = Some(size);
+            }
         }
         self.prefs.save();
         event_loop.exit();
@@ -601,6 +604,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ThemeChanged(t) => {
                 self.system_dark = t == winit::window::Theme::Dark;
                 self.sync_style();
+                self.sync_frost();
                 self.redraw();
             }
             WindowEvent::Focused(f) => {

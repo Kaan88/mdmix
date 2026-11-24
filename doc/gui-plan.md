@@ -177,14 +177,24 @@ waits for HID. **It writes nothing:** the worker's only command is `Read`, no de
 the only settings that change are the app's own (theme, backdrop, corners, the page, the window's size, in
 `%LOCALAPPDATA%\g6-gui\settings.ini`). Controls are drawn as the device has them, in a faded palette; a page says
 "Device read only" in its header. A value the G6 didn't give is "—", a choice with no answer has nothing chosen.
-The mixer values and the master volume are "—" until `g6-osaudio` fills `DeviceStatus.mixer` (the model has the place,
-`model::MixerView`; map it in `Model::apply`). The speaker setup has no read-back, so none is chosen. The G6 away: a
-banner with Retry, a "Not connected" badge, the last status kept on screen.
+The G6 away: a banner with Retry, a "Not connected" badge, the last status kept on screen.
+
+**Round 2 (mixer and review fixes):** `f/g0-proto` is merged. The worker also calls `g6_osaudio::read_mixer()` (Core
+Audio reads only; no Set\* call, no change of Windows' volume, mute or default device) after each HID read, on the
+same thread, and `model::MixerView::from_os` maps it by name onto the strips: the master is the default playback
+endpoint, recording strips use Windows' percent and mute, monitoring strips only have a level in dB (no fader
+position), and Windows' speaker setup of the output in use selects Stereo, 5.1 or 7.1 (any other name is said in
+the caption). They fill the sidebar volume and speaker setup, the Playback, Mixer and Microphone pages and the chain's
+Recording, Monitoring and Mixer stages. No mixer (Windows gave none): "—" as before. The output meter is not opened.
+A raw zero decoder mode or filter while Direct mode is on reads "Not reported in Direct mode". Review fixes: page
+hit regions are clipped to the page's view and the title row's drag sits above them; ThemeChanged re-syncs the frost;
+closing while minimised keeps the saved size; the dialog's Device page follows a read starting; the toast is drawn over
+the dialog; a read carries whether a person asked, so its toast describes that read.
 
 **Run:**
 
 - From `rust/`: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
-  `cargo test --workspace` pass (30 tests in `g6-gui`); `cargo build --release -p g6-gui` gives a 3.5 MB exe. No test
+  `cargo test --workspace` pass (34 tests in `g6-gui`); `cargo build --release -p g6-gui` gives a 3.5 MB exe. No test
   opens a device.
 - `cargo run --release -p g6-gui -- --shots target/g6-gui-shots` renders 50 PNGs without a window or a device: every
   page in both themes from the recorded G6 (`tests/vectors/status_live.json`, which a test re-parses to check
@@ -192,6 +202,9 @@ banner with Retry, a "Not connected" badge, the last status kept on screen.
   Mica and Acrylic simulated over a sample wallpaper, the dialog's two pages, and the smallest window (760 x 600).
   `--shot <page> <light|dark> [--sample] [--backdrop] [--dialog] [--out] [--size] [--scale]` renders one. They are for
   review; `target/` is ignored by git.
+- Round 2: the release window was started once more with `--page mixer` (no click, killed after 9 s): the master
+  volume read 96 with Speakers and Stereo chosen, the recording strips 68, External Mic monitoring +8.1 dB muted. Those
+  are Windows' values as the window showed them; they were not compared with Windows' own mixer by hand.
 - The real window was started twice on this PC with the G6 connected (no click, no key, killed after 9 to 12 s):
   no error output, and a capture of the window showed the Equalizer page with the G6's own firmware
   (2.1.250903.1324), Speakers, EQ off, its ten bands and the preset they match (HipHop), in the system's dark theme.
@@ -208,6 +221,10 @@ banner with Retry, a "Not connected" badge, the last status kept on screen.
 - The Light theme and any display scale other than 1 in the running window; shots at scale 1.5 are only in a test.
 - Linux and macOS: `Cargo.toml` has the toolkit's winit and softbuffer features for Linux, and nothing was built
   there. The blur path (`BlurSystem`) is written, not run.
+- The mixer on other machines or with other G6 endpoint names (a name Windows spells differently is "—"), the
+  speaker setup of the output that isn't in use (not read), and `read_mixer` while the G6 is away.
+- The Live shots have no mixer: no real Core Audio read is kept in the repository. Only the Busy shots show mixer values,
+  and those are invented.
 - The look. Nothing here counts until the user opens it.
 
 **Differences from the plan, so nobody is surprised:** the sidebar list is plain geometry (eight fixed entries and a

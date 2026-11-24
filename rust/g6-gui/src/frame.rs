@@ -65,10 +65,7 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
     };
     p.fill(Rect::new(0.0, 0.0, w, h), pal.page);
 
-    // The title row first in the hit list, so everything drawn later is on top of it.
     let title = Rect::new(0.0, 0.0, w, TITLE_H);
-    env.hits.add(Hit::Drag, title);
-
     let main = Rect::new(
         SIDE_W,
         TITLE_H,
@@ -79,6 +76,9 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
 
     let side = Rect::new(0.0, TITLE_H, SIDE_W, (h - TITLE_H).max(0.0));
     draw_sidebar(p, &mut env, input, side);
+    // The empty title row drags the window. It goes in after the page, which is clipped to its own view anyway, and
+    // before the title's own buttons, which are on top of it.
+    env.hits.add(Hit::Drag, title);
     if input.frosted {
         frost::mark(p.bmp, p.dev_rect(side));
     }
@@ -87,11 +87,12 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
         frost::mark(p.bmp, p.dev_rect(title));
     }
 
-    if let Some(t) = input.toast {
-        Bubble::toast(p, t, main).draw(p, &pal);
-    }
     if let Some(form) = dialog {
         form.draw(p, &pal, Rect::new(0.0, 0.0, w, h), false);
+    }
+    // The toast is on top of everything, the dialog too.
+    if let Some(t) = input.toast {
+        Bubble::toast(p, t, main).draw(p, &pal);
     }
     FrameOut {
         hits: env.hits,
@@ -231,7 +232,7 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     );
     y += segments::SEGMENT_H + 10.0;
 
-    // Master volume: it is Core Audio's, so it is a dash until that is read.
+    // Master volume: it is Core Audio's, so it is a dash until Windows gives it.
     let master = m.mixer.as_ref().map(|v| v.master);
     let muted = master.and_then(|s| s.muted) == Some(true);
     p.icon(
@@ -255,23 +256,22 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     p.text_right(Face::Ui, 13.0, x + inner, y + 14.0, &reading, dim.text);
     y += 38.0;
 
-    // Speaker setup: no read-back is known, so nothing is chosen.
-    p.text(
-        Face::Semibold,
-        11.0,
-        x,
-        y + 6.0,
-        "Speaker setup",
-        pal.muted,
-        inner,
-    );
+    // Speaker setup: Windows' setting of the output in use. One that isn't stereo, 5.1 or 7.1 is said in the caption
+    // and nothing is chosen.
+    let layout = m.mixer.as_ref().and_then(|v| v.speaker_layout.as_deref());
+    let chosen = m.mixer.as_ref().and_then(|v| v.layout_index());
+    let caption = match (layout, chosen) {
+        (Some(l), None) => format!("Speaker setup · {l}"),
+        _ => "Speaker setup".to_string(),
+    };
+    p.text(Face::Semibold, 11.0, x, y + 6.0, &caption, pal.muted, inner);
     y += 16.0;
     segments::draw_segments(
         p,
         &dim,
         Rect::new(x, y, inner, segments::SEGMENT_H),
         &facts::LAYOUTS,
-        None,
+        chosen,
         None,
     );
     y += segments::SEGMENT_H + 12.0;
@@ -377,6 +377,7 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
     }
     let view = Rect::new(main.x, top, main.w, (main.bottom() - top).max(0.0));
     let old = p.clip(view);
+    let hits_from = env.hits.len();
     let x = view.x + PAD;
     let w = (view.w - 2.0 * PAD).max(100.0);
     let mut y = view.y + 14.0 - input.scroll;
@@ -419,6 +420,8 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
     let content = (start + used + 24.0) - (view.y - input.scroll);
     let max_scroll = (content - view.h).max(0.0);
     p.restore(old);
+    // What scrolled out of the view can't be hit: not the page's controls, and not over the banner or the title row.
+    env.hits.clip_from(hits_from, view);
     if let Some((track, thumb)) =
         scroll::scrollbar(view, content, view.h, input.scroll.min(max_scroll))
     {
@@ -441,6 +444,16 @@ mod tests {
         pal: mdshared_ui::theme::Palette,
         size: (f32, f32),
     ) -> (Bitmap, FrameOut) {
+        render_at(page, sample, pal, size, 0.0)
+    }
+
+    fn render_at(
+        page: Page,
+        sample: Sample,
+        pal: mdshared_ui::theme::Palette,
+        size: (f32, f32),
+        scroll: f32,
+    ) -> (Bitmap, FrameOut) {
         let model = sample.model();
         let prefs = Prefs::default();
         let mut bmp = Bitmap::new(size.0 as u32, size.1 as u32);
@@ -452,7 +465,7 @@ mod tests {
             pal,
             page,
             size,
-            scroll: 0.0,
+            scroll,
             maximized: false,
             hover: None,
             pressed: None,
@@ -481,6 +494,56 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The Settings page scrolled through: its controls (the appearance buttons, low on the page) pass behind the title
+    /// row and the banner. They must not take the click there.
+    #[test]
+    fn scrolled_out_controls_do_not_cover_the_title_row_or_the_banner() {
+        let size = (760.0, 600.0);
+        for sample in [Sample::Live, Sample::Away] {
+            let (_, top) = render(Page::Settings, sample, LIGHT, size);
+            assert!(
+                top.max_scroll > 100.0,
+                "the page has to scroll for this test"
+            );
+            let mut at_title = 0;
+            let mut s = 0.0;
+            // Past the end too: the window clamps the scroll, the frame must not depend on it.
+            while s <= top.max_scroll + 700.0 {
+                let (_, out) = render_at(Page::Settings, sample, LIGHT, size, s);
+                // The title row, left of the window buttons.
+                for x in (250..570).step_by(10) {
+                    assert_eq!(
+                        out.hits.at(x as f32, 20.0),
+                        Some(Hit::Drag),
+                        "x {x}, scroll {s}"
+                    );
+                    at_title += 1;
+                }
+                if let Some(retry) = out.hits.rect_of(Hit::Retry) {
+                    assert_eq!(
+                        out.hits.at(retry.cx(), retry.cy()),
+                        Some(Hit::Retry),
+                        "scroll {s}"
+                    );
+                    // The page's view starts below the banner, so nothing of the page is under it.
+                    assert!(out.view.y >= retry.bottom());
+                    for x in (retry.x as i32..retry.right() as i32 - 60).step_by(10) {
+                        let hit = out.hits.at(x as f32, retry.cy());
+                        assert!(
+                            !matches!(
+                                hit,
+                                Some(Hit::Theme(_) | Hit::Backdrop(_) | Hit::Corners(_))
+                            ),
+                            "x {x}, scroll {s}: {hit:?}"
+                        );
+                    }
+                }
+                s += 40.0;
+            }
+            assert!(at_title > 0);
         }
     }
 

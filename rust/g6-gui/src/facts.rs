@@ -31,6 +31,29 @@ pub fn output_of(s: &DeviceStatus) -> Option<Output> {
     }
 }
 
+/// What a decoder mode or filter reads as when the G6 isn't giving one (Direct mode on).
+pub const NOT_REPORTED: &str = "Not reported in Direct mode";
+
+/// A raw, unnamed answer that is all zeros ("0x00", "0x00000000"): what the G6 sends for the decoder mode and the
+/// DAC filter while Direct mode is on. It is no setting.
+pub fn is_raw_zero(value: &str) -> bool {
+    value
+        .strip_prefix("0x")
+        .is_some_and(|h| !h.is_empty() && h.chars().all(|c| c == '0'))
+}
+
+/// In Direct mode a raw zero decoder mode or filter is "not reported": it becomes `None`.
+pub fn drop_direct_zeros(s: &mut DeviceStatus) {
+    if s.direct_mode != Some(true) {
+        return;
+    }
+    for v in [&mut s.decoder_mode, &mut s.dac_filter] {
+        if v.as_deref().is_some_and(is_raw_zero) {
+            *v = None;
+        }
+    }
+}
+
 pub fn filter_label(s: &DeviceStatus) -> Option<String> {
     let name = s.dac_filter.as_deref()?;
     Some(match PlaybackFilter::from_name(name) {

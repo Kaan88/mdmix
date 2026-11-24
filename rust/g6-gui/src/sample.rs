@@ -83,15 +83,23 @@ pub fn busy_status() -> DeviceStatus {
     s
 }
 
-/// Mixer values for a shot of how the Mixer page looks with values. Invented; the real ones come with `g6-osaudio`.
+/// Mixer values for a shot of how the Mixer page looks with values. Invented: no real Core Audio read is kept in the
+/// repository, so the Live sample has none.
 pub fn busy_mixer() -> MixerView {
-    let s = |volume, muted| Strip {
-        volume: Some(volume),
+    let s = Strip::percent;
+    let mon = |db, muted| Strip {
+        volume: None,
+        db: Some(db),
         muted: Some(muted),
     };
     MixerView {
         master: s(34, false),
-        monitoring: [s(40, true), s(60, true), s(50, true), s(30, true)],
+        monitoring: [
+            mon(-9.0, true),
+            mon(8.1, true),
+            mon(0.0, false),
+            mon(-3.5, true),
+        ],
         recording: [
             s(50, true),
             s(80, false),
@@ -100,13 +108,14 @@ pub fn busy_mixer() -> MixerView {
             s(70, false),
         ],
         mix_muted: Some(false),
+        speaker_layout: Some("5.1".into()),
     }
 }
 
 /// Which fixed state a shot draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sample {
-    /// The real transcript, with the mixer unknown (what the app shows today).
+    /// The real transcript. It has no mixer: Windows' levels were not recorded with it, so they show "—".
     Live,
     /// Invented values in every field, mixer included.
     Busy,
