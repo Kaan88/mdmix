@@ -18,13 +18,16 @@ suite.
 | Output (speakers / headphones) | yes | yes | HID |
 | Direct mode, SPDIF-out direct mode | yes | yes | HID |
 | DAC filter, decoder mode | yes | yes (reads 0 while Direct mode is on) | HID |
-| SBX effects (surround, crystalizer, bass, smart volume, dialog+) | yes | yes (per-effect switch + level; not the SBX master switch) | HID |
-| Equalizer (on/off, preamp, 10 bands) | – | yes | HID |
+| SBX master switch, Scout Mode | yes | yes | HID |
+| SBX effects (surround, crystalizer, bass, smart volume, dialog+) | yes | yes | HID |
+| Equalizer (on/off, preamp, 10 bands) | yes | yes | HID |
 | Mic boost | yes | yes | HID |
-| Voice clarity, mic EQ | yes | – | HID |
+| Voice clarity, noise reduction, AEC, mic smart volume, mic EQ + preset | yes | yes | HID |
+| Headphone virtualization to Line Out | yes | – | HID |
 | RGB light, volume-ring light | yes | yes | HID |
 | Firmware version | – | yes | HID |
-| Volumes / mutes / mixer / speaker layout | yes | – | USB Audio Control (needs claim on Linux) |
+| Volumes / mutes / mixer | yes | Windows (Core Audio) | USB Audio Control (needs claim on Linux) |
+| Speaker layout | yes | – | USB Audio Control |
 
 **HID** commands just work. **Audio Control** commands need the kernel sound driver detached on Linux
 (`--claim-and-release`, then audio is restored). See [Linux audio commands](#linux-audio-commands).
@@ -72,6 +75,8 @@ g6 --status --json          # same, as JSON (for scripts)
 g6 --set-output Headphones
 g6 --toggle-output
 g6 --sbx-surround Enabled --sbx-surround-value 40
+g6 --scout-mode Disabled --sbx Enabled
+g6 --eq Enabled --eq-preamp -2 --eq-band 1k 1.5 --eq-band 16k -3
 g6 --lighting-volume-ring Disabled
 g6 --dry-run --debug --playback-filter SLOW_ROLL_OFF_LINEAR_PHASE   # print the packets, send nothing
 g6 --help                   # every option

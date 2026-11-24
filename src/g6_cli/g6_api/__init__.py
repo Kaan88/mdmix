@@ -65,6 +65,15 @@ from g6_cli.g6_spec.sbx import (
     sbx_smart_volume_special as sbx_smart_volume_special_spec,
     sbx_toggle as sbx_toggle_spec,
 )
+from g6_cli.g6_spec.equalizer import (
+    equalizer_band as equalizer_band_spec,
+    equalizer_enabled as equalizer_enabled_spec,
+    equalizer_preamp as equalizer_preamp_spec,
+)
+from g6_cli.g6_spec.modes import ProcessingMode, processing_mode as processing_mode_spec
+from g6_cli.g6_spec.playback import (
+    enable_line_out_headphone_virtualization as enable_line_out_headphone_virtualization_spec,
+)
 
 
 class G6Api:
@@ -473,3 +482,25 @@ class G6Api:
 
     def sbx_smart_volume_special_available(self) -> bool:
         return self.__device.is_hid_interface_available()
+
+    # --- Processing modes (SBX master switch, Scout Mode) ---
+
+    def processing_mode(self, mode: ProcessingMode, enable: bool) -> None:
+        self.__device.send_hid_data_to_device(hid_data_list=processing_mode_spec(mode=mode, enable=enable))
+
+    # --- Equalizer ---
+
+    def equalizer_enabled(self, enable: bool) -> None:
+        self.__device.send_hid_data_to_device(hid_data_list=equalizer_enabled_spec(enable=enable))
+
+    def equalizer_preamp(self, db: float) -> None:
+        self.__device.send_hid_data_to_device(hid_data_list=equalizer_preamp_spec(db=db))
+
+    def equalizer_band(self, freq: str, db: float) -> None:
+        self.__device.send_hid_data_to_device(hid_data_list=equalizer_band_spec(freq=freq, db=db))
+
+    # --- Playback: headphone virtualization on Line Out ---
+
+    def playback_line_out_headphone_virtualization(self, enable: bool) -> None:
+        hid_data_list = enable_line_out_headphone_virtualization_spec(enable=enable)
+        self.__device.send_hid_data_to_device(hid_data_list=hid_data_list)

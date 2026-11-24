@@ -13,6 +13,8 @@ from g6_cli.g6_spec import (
     BOTH_CHANNELS,
 )
 from g6_cli.g6_spec.decoder import DecoderMode
+from g6_cli.g6_spec.equalizer import EQ_BAND_FREQS
+from g6_cli.g6_spec.modes import ProcessingMode
 from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
 from g6_cli.g6_status import DAC_FILTER_LABELS, DeviceStatus, read_status
 from g6_cli.g6_util import to_bool
@@ -157,6 +159,9 @@ def parse_cli_args(argv: list[str] | None = None):
                                         "FAST_ROLL_OFF_LINEAR_PHASE|SLOW_ROLL_OFF_LINEAR_PHASE}"
                                     ),
                                     help='Set playback filter by enum name.')
+    playback_hid_group.add_argument('--playback-line-out-headphone-virtualization', required=False, type=str,
+                                    choices=enabled_disabled, metavar="{Enabled|Disabled}",
+                                    help='Apply headphone virtualization to Line Out too (SBC: Speakers settings).')
 
     #
     # Decoder [HID]
@@ -389,6 +394,25 @@ def parse_cli_args(argv: list[str] | None = None):
     sbx_hid_group.add_argument('--sbx-dialog-plus-value', required=False, type=int, choices=numbers_0_100,
                                metavar="{0..100}",
                                help='Set the value for the Dialog-Plus sound effect as integer.')
+    sbx_hid_group.add_argument('--sbx', required=False, type=str, choices=enabled_disabled,
+                               metavar="{Enabled|Disabled}",
+                               help='SBX master switch (SBC: SBX Profile toggle). Excludes Scout Mode.')
+    sbx_hid_group.add_argument('--scout-mode', required=False, type=str, choices=enabled_disabled,
+                               metavar="{Enabled|Disabled}",
+                               help='Scout Mode. Excludes the SBX effects.')
+
+    #
+    # Equalizer [HID]
+    #
+    eq_hid_group = parser.add_argument_group('Equalizer [HID]',
+                                             description="Graphic equalizer, gains in dB from -12 to 12.")
+    eq_hid_group.add_argument('--eq', required=False, type=str, choices=enabled_disabled,
+                              metavar="{Enabled|Disabled}", help='Enable/disable the equalizer.')
+    eq_hid_group.add_argument('--eq-preamp', required=False, type=float, metavar='DB',
+                              help='Equalizer preamp in dB.')
+    eq_hid_group.add_argument('--eq-band', required=False, nargs=2, action='append', metavar=('FREQ', 'DB'),
+                              help=f'Set one band, e.g. --eq-band 1k -2.5 (repeatable). '
+                                   f'FREQ: {", ".join(EQ_BAND_FREQS)}.')
 
     # parse args and verify
     args = parser.parse_args(argv)
@@ -696,6 +720,24 @@ def device_set_audio_effects(api: G6Api, args: argparse.Namespace):
             api.sbx_toggle(AudioFeature.DIALOG_PLUS_TOGGLE, to_bool(args.sbx_dialog_plus))
         if args.sbx_dialog_plus_value is not None:
             api.sbx_slider(AudioFeature.DIALOG_PLUS_SLIDER, args.sbx_dialog_plus_value)
+
+        # processing modes: switch the old one off before the new one on (they exclude each other)
+        for mode, value in sorted([(ProcessingMode.SBX, args.sbx), (ProcessingMode.SCOUT_MODE, args.scout_mode)],
+                                  key=lambda mv: mv[1] == 'Enabled'):
+            if value is not None:
+                api.processing_mode(mode, enable=to_bool(value))
+
+        # equalizer
+        if args.eq is not None:
+            api.equalizer_enabled(enable=to_bool(args.eq))
+        if args.eq_preamp is not None:
+            api.equalizer_preamp(db=args.eq_preamp)
+        for freq, db in args.eq_band or []:
+            api.equalizer_band(freq=freq, db=float(db))
+
+        if args.playback_line_out_headphone_virtualization is not None:
+            api.playback_line_out_headphone_virtualization(
+                enable=to_bool(args.playback_line_out_headphone_virtualization))
     finally:
         # Release the USB AudioControl interface if it has been claimed.
         if args.claim_and_release and api.is_audio_interface_available():
@@ -753,6 +795,8 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
         ('RGB light', status.rgb_enabled),
         ('Volume ring', status.ring_enabled),
     ]
+    rows.append(('SBX', status.sbx_enabled))
+    rows.append(('Scout mode', status.scout_mode))
     sbx_labels = {'surround': 'Surround', 'crystalizer': 'Crystalizer', 'bass': 'Bass',
                   'smart_volume': 'Smart volume', 'dialog_plus': 'Dialog+'}
     for name, effect in (status.sbx or {}).items():
@@ -768,6 +812,17 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
         bands = ' '.join(f'{freq}:{db(v)}' for freq, v in status.eq_bands_db.items())
         rows.append(('EQ (dB)', f'preamp {db(status.eq_preamp_db)} | {bands}'))
     rows.append(('Mic boost', None if status.mic_boost_db is None else f'{status.mic_boost_db} dB'))
+    rows.append(('Voice clarity', status.voice_clarity))
+    rec = status.recording
+    if rec is not None:
+        level = '?' if rec['noise_reduction_level'] is None else rec['noise_reduction_level']
+        rows.append(('Noise reduct.', f"{fmt(rec['noise_reduction'])}, {level}"))
+        rows.append(('Echo cancel.', rec['acoustic_echo_cancellation']))
+        rows.append(('Mic smart vol', rec['smart_volume']))
+        mic_eq = fmt(rec['mic_eq'])
+        if status.mic_eq_preset:
+            mic_eq += f', {status.mic_eq_preset}'
+        rows.append(('Mic EQ', mic_eq))
     rows.extend(format_mixer_rows(status.mixer))
     return '\n'.join(f'{label:<13} {fmt(value)}' for label, value in rows)
 

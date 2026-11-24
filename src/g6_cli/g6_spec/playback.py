@@ -3,6 +3,8 @@ from g6_cli.g6_spec import UsbAudioData, UsbHidDataFragment, get_playback_volume
 
 PLAYBACK_INTERMEDIATE_DIRECT_MODE = bytes.fromhex('0005')
 PLAYBACK_INTERMEDIATE_SPDIF_OUT_DIRECT_MODE = bytes.fromhex('000d')
+# SBC: Speakers settings -> "Apply Headphone Virtualization to Line Out" (payloads/raw/g6-sbc-session-c.pcap)
+PLAYBACK_INTERMEDIATE_LINE_OUT_HEADPHONE_VIRTUALIZATION = bytes.fromhex('000a')
 
 
 def playback_mute(mute: bool) -> list[UsbAudioData]:
@@ -208,6 +210,22 @@ def enable_spdif_out_direct_mode(enable: bool) -> list[UsbHidDataFragment]:
     return [
         UsbHidDataFragment.empty_additional_payload(mode=bytes.fromhex('3903'),
                                                     intermediate=PLAYBACK_INTERMEDIATE_SPDIF_OUT_DIRECT_MODE,
+                                                    audio_feature=bytes.fromhex('01' if enable else '00'),
+                                                    value=bytes.fromhex('0000 0000')),
+        UsbHidDataFragment.empty_additional_payload(mode=bytes.fromhex('3901'), intermediate=bytes.fromhex('0100'),
+                                                    audio_feature=bytes.fromhex('00'), value=bytes.fromhex('0000 0000'))
+    ]
+
+
+def enable_line_out_headphone_virtualization(enable: bool) -> list[UsbHidDataFragment]:
+    """
+    Apply the headphone virtualization (headphone EQ/SBX settings) to Line Out too.
+    Note: SoundBlaster Command also re-sends its separately stored headphone SBX values when this changes; this
+    command only flips the device switch.
+    """
+    return [
+        UsbHidDataFragment.empty_additional_payload(mode=bytes.fromhex('3903'),
+                                                    intermediate=PLAYBACK_INTERMEDIATE_LINE_OUT_HEADPHONE_VIRTUALIZATION,
                                                     audio_feature=bytes.fromhex('01' if enable else '00'),
                                                     value=bytes.fromhex('0000 0000')),
         UsbHidDataFragment.empty_additional_payload(mode=bytes.fromhex('3901'), intermediate=bytes.fromhex('0100'),

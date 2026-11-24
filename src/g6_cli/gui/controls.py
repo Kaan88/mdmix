@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from g6_cli.g6_spec import PlaybackFilter
+from g6_cli.g6_spec.equalizer import EQ_BAND_FREQS
 from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
 from g6_cli.g6_status import DAC_FILTER_LABELS
 
@@ -46,6 +47,7 @@ class Slider:
     step: int = 1
     default: int = 0
     channels_flag: Optional[str] = None  # if set, a Both/Left/Right selector is sent along with the value
+    args: tuple[str, ...] = ()  # sent between the flag and the value, e.g. the band of --eq-band FREQ DB
 
     def values(self) -> range:
         return range(self.lo, self.hi + 1, self.step)
@@ -75,6 +77,18 @@ def _volume_group(base: str, step: int = 10, label_prefix: str = '') -> tuple:
 
 # --- SBX -----------------------------------------------------------------------------------------------------------
 
+SBX_MODE = Section('Processing Mode', (
+    Toggle('SBX', 'sbx'),
+    Toggle('Scout Mode', 'scout-mode'),
+), subtitle='SBX and Scout Mode exclude each other; Direct mode turns both off.')
+
+EQUALIZER = Section('Equalizer', (
+    Toggle('Enable', 'eq'),
+    Slider('Preamp (dB)', 'eq-preamp', lo=-12, hi=12),
+    *(Slider(f'{freq} Hz' if not freq.endswith('k') else f'{freq}Hz', 'eq-band', lo=-12, hi=12, args=(freq,))
+      for freq in EQ_BAND_FREQS),
+))
+
 SBX_SECTIONS: tuple[Section, ...] = tuple(
     Section(name, (Toggle('Enable', f'sbx-{key}'), Slider('Intensity (0–100)', f'sbx-{key}-value')) + extra)
     for name, key, extra in [
@@ -92,6 +106,10 @@ PLAYBACK_VOLUME = Section('Volume & Mute', (
     Toggle('Mute Playback', 'playback-mute'),
     Slider('Volume (0–100)', 'playback-volume', channels_flag='playback-volume-channels'),
 ), audio=True)
+
+LINE_OUT = Section('Line Out', (
+    Toggle('Headphone Virtualization', 'playback-line-out-headphone-virtualization'),
+))
 
 # --- Recording -----------------------------------------------------------------------------------------------------
 
@@ -138,7 +156,7 @@ MIXER_RECORDING = MixerGroup('Recording Sources', tuple(
 
 
 def all_sections() -> list[Section]:
-    sections = [*SBX_SECTIONS, PLAYBACK_VOLUME, VOICE_CLARITY, MIC_RECORDING, MIC_MONITORING, MIXER_PLAYBACK]
+    sections = [SBX_MODE, *SBX_SECTIONS, EQUALIZER, PLAYBACK_VOLUME, LINE_OUT, VOICE_CLARITY, MIC_RECORDING, MIC_MONITORING, MIXER_PLAYBACK]
     for group in (MIXER_MONITORING, MIXER_RECORDING):
         sections.extend(Section(f'{group.title}: {label}', controls, audio=True) for label, controls in group.sources)
     return sections
@@ -146,7 +164,7 @@ def all_sections() -> list[Section]:
 
 def command_for(control, value, channels: str = 'Both') -> list[str]:
     """The CLI arguments a control sends for ``value`` (``channels`` only applies to sliders with channels)."""
-    cmd = [f'--{control.flag}', str(value)]
+    cmd = [f'--{control.flag}', *getattr(control, 'args', ()), str(value)]
     if isinstance(control, Slider) and control.channels_flag:
         cmd += [f'--{control.channels_flag}', channels]
     return cmd

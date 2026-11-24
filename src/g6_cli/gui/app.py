@@ -533,6 +533,7 @@ class G6GUI(ctk.CTk):
 
         self._audio_banner(sf)
         self._table_section(sf, C.PLAYBACK_VOLUME)
+        self._table_section(sf, C.LINE_OUT)
 
         layout = self._section(sf, 'Speaker Layout', badge=self._audio_badge())
         for output in C.OUTPUTS:
@@ -545,8 +546,10 @@ class G6GUI(ctk.CTk):
                                                                                      pady=(2, 8))
 
     def _build_tab_sbx(self, sf):
+        self._table_section(sf, C.SBX_MODE)
         for section in C.SBX_SECTIONS:
             self._table_section(sf, section)
+        self._table_section(sf, C.EQUALIZER)
 
     def _build_tab_recording(self, sf):
         self._table_section(sf, C.VOICE_CLARITY)

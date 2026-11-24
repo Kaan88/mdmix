@@ -21,24 +21,26 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | SBX Bass on/off + level | ✅ | ✅ | HID | as above; `9617` = 80.0 is probably the bass crossover (Hz), unconfirmed |
 | SBX Smart Volume on/off + level + Night/Loud | ✅ | ✅ | HID | mode = `9606` (0 Normal, 1 Loud, 2 Night) |
 | SBX Dialog+ on/off + level | ✅ | ✅ | HID | as above |
-| SBX master switch | ❓ | ❌ | HID | per-effect switches read 0 with it off, but no own readback found; capture toggling only the master |
+| SBX master switch | ✅ | ✅ | HID | write `5a2605 07 01 00 <on>`; mode register `5a260308ffff` → bit 0x01 (g6-sbc-session-c). Excludes Scout Mode |
 | Mic boost 0/10/20/30 dB | ✅ | ✅ | HID | `5a3c0201` → `5a3c0401 00 02 <dB>` |
-| Voice clarity on/off, noise reduction, AEC, smart volume | ✅ | 🟡 | HID | SBC reads `5a110301 95<id>` at startup (ids 04, 05, 0a–1b, 2c, 13); capture A/B with recording settings changed |
-| Mic EQ on/off + presets | ✅ | 🟡 | HID | probably `95 0b–0d` (400/1400/2000 = frequencies?) and `95 14–1b` (gains); same A/B capture |
+| Voice clarity on/off, noise reduction, AEC, smart volume | ✅ | ✅ | HID | `95 04` NR (what `--recording-voice-clarity` writes), `95 05` NR level, `95 00` AEC, `95 2c` smart volume; Voice Clarity = mode bit 0x04, no own write (SBC turns it off with the last effect) |
+| Mic EQ on/off + presets | ✅ | ✅ | HID | `95 13` switch, `95 14–1b` gains matched to `MicrophoneEqualizerPreset` (PRESET_1/2 band `17` fixed: 2 dB, was ~0) |
 | RGB light on/off | ✅ | ✅ | HID | |
 | RGB static colour | ✅ | ❌ | HID | |
-| RGB effects (breathing, cycle, …) | ❌ | ❌ | HID | ❓ capture each effect |
-| Volume ring light | ✅ | ✅ | HID | |
+| RGB effects (solo, pulsate, cycle, music reactive) | – | – | HID | **app-side**: SBC animates them by streaming colour writes (`5a3a02/06/09`) ~20×/s; the device stores no effect. Would need a background process |
+| Volume ring light (SBC: LED indicator) | ✅ | ✅ | HID | write `5a3903 00 0e <00 on / 01 off>` |
 | Playback volume L/R | ✅ | 🟡 | UAC | Windows: read through Core Audio (`g6_os_audio`), since libusb can't GET_CUR an interface the audio driver owns. Linux: ❌ (amixer would do) |
 | Playback mute | ✅ | 🟡 | UAC | as above |
 | Mic recording volume / mute | ✅ | 🟡 | UAC | as above (recording endpoints) |
 | Mic monitoring volume / mute | ✅ | 🟡 | UAC | as above (playback-path topology parts: Microphone = External Mic) |
 | Mixer monitoring / recording sources | ✅ | 🟡 | UAC | as above; Auxiliary = Line In; SPDIF In's level part is named "External Input Recording Mute" by the driver (unconfirmed) |
 | Speaker layout (stereo / 5.1 / 7.1) | ✅ | ❌ | UAC | ❓ may live in Windows driver settings, not on the device |
-| Graphic equalizer on/off, preamp, 10 bands | ❌ | ✅ | HID | read `96 09` / `96 0a` / `96 0b–14` (dB float32). Set: very likely `5a1207 0196 <id> <float>` like SBX; capture one band move to confirm before adding |
+| Speaker type (desktop / bookshelf) | – | – | – | app-side: no USB traffic when changed (g6-sbc-session-c) |
+| Headphone virtualization to Line Out | ✅ | ❌ | HID | `5a3903 00 0a <01/00>` (Direct-mode family); no readback found yet |
+| Graphic equalizer on/off, preamp, 10 bands | ✅ | ✅ | HID | `5a1207 0196 <09 / 0a / 0b–14> <float32>` + commit, confirmed in g6-sbc-session-c |
 | EQ presets | – | – | – | app-side: a preset is just 10 band values |
-| Scout Mode | ❌ | 🟡 | HID | SBC writes `5a2605 07…` (blocked from replay); `5a260308ffff` answer changed 01→02 with it on. Capture an on/off pair |
-| Headphone gain / impedance | ❌ | ❌ | ? | ❓ may be the hardware switch only |
+| Scout Mode | ✅ | ✅ | HID | write `5a2605 07 02 00 <on>`; mode register bit 0x02 |
+| Headphone gain / impedance | – | – | – | hardware switch only; SBC's headphone dialog has no gain setting |
 | Profiles (save / load) | ❌ | – | – | probably app-side: a bundle of the settings above, no own protocol |
 | Firmware version | – | ✅ | HID | |
 | Firmware update | ✗ | – | – | **out of scope**: this is the one place you can brick the card |

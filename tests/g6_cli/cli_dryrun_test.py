@@ -150,6 +150,23 @@ CASES.append(("sbx_toggle", lambda: ["--sbx-dialog-plus", "Disabled"]))
 CASES.append(("sbx_slider", lambda: ["--sbx-dialog-plus-value", "0"]))
 CASES.append(("sbx_slider", lambda: ["--sbx-dialog-plus-value", "42"]))
 CASES.append(("sbx_slider", lambda: ["--sbx-dialog-plus-value", "100"]))
+CASES.append(("processing_mode", lambda: ["--sbx", "Enabled"]))
+CASES.append(("processing_mode", lambda: ["--sbx", "Disabled"]))
+CASES.append(("processing_mode", lambda: ["--scout-mode", "Enabled"]))
+CASES.append(("processing_mode", lambda: ["--scout-mode", "Disabled", "--sbx", "Enabled"]))
+
+# --- Equalizer ---
+CASES.append(("equalizer_enabled", lambda: ["--eq", "Enabled"]))
+CASES.append(("equalizer_enabled", lambda: ["--eq", "Disabled"]))
+CASES.append(("equalizer_preamp", lambda: ["--eq-preamp", "-3.5"]))
+CASES.append(("equalizer_band", lambda: ["--eq-band", "31", "12"]))
+CASES.append(("equalizer_band", lambda: ["--eq-band", "1k", "-2.5", "--eq-band", "16k", "-12"]))
+
+# --- Line Out ---
+CASES.append(("playback_line_out_headphone_virtualization",
+              lambda: ["--playback-line-out-headphone-virtualization", "Enabled"]))
+CASES.append(("playback_line_out_headphone_virtualization",
+              lambda: ["--playback-line-out-headphone-virtualization", "Disabled"]))
 # @formatter:on
 
 

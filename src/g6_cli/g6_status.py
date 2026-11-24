@@ -12,7 +12,9 @@ Confidence of each field (as of firmware 2.1.250903.1324):
 - direct_mode, spdif_direct, ring_enabled: decoded from a shared flags response; matched with on/off captures.
 - sbx (per-effect switch + level), smart_volume_mode, eq_*: float32 parameters (5a110301 96 <id>), matched against
   SoundBlaster Command in two settings states (payloads/raw/g6-sbc-startup-a/-b) and live reads.
-  The SBX *master* switch has no known readback yet.
+- sbx_enabled / scout_mode / voice_clarity: mode register 5a260308ffff (payloads/raw/g6-sbc-session-c).
+- recording (noise reduction, AEC, mic smart volume, mic EQ + preset): float32 parameters 5a110301 95 <id>,
+  matched against SoundBlaster Command in session C and live reads.
 - mic_boost_db: matched against the 0/10/20/30 dB captures.
 - Speaker layout (stereo/5.1/7.1) has no known readback and is intentionally not reported.
 """
@@ -25,6 +27,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 from g6_cli.g6_spec import AudioFeature, PlaybackFilter
+from g6_cli.g6_spec.equalizer import EQ_BAND_FREQS, EQ_BAND_IDS as _EQ_BAND_IDS_BY_FREQ, EQ_ENABLE_ID, EQ_PREAMP_ID
+from g6_cli.g6_spec.modes import MODE_BIT_SBX, MODE_BIT_SCOUT, MODE_BIT_VOICE_CLARITY, MODE_QUERY
+from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
 
 G6_VENDOR_ID = 0x041E
 G6_PRODUCT_ID = 0x3256
@@ -47,6 +52,7 @@ Q_DAC_FILTER = bytes.fromhex('5a6c0101')
 Q_RGB = (bytes.fromhex('5a020a3a00060100'), bytes.fromhex('5a3a020701'))
 Q_RING = (bytes.fromhex('5a020a3a000e0100'), bytes.fromhex('5a3a021001'))
 Q_MIC_BOOST = bytes.fromhex('5a3c0201')
+Q_PROCESSING_MODE = MODE_QUERY
 
 R_MODE_FLAGS_PREFIXES = (bytes.fromhex('5a390501'), bytes.fromhex('5a390902'))
 R_DECODER_PREFIX = bytes.fromhex('5a110801009702')
@@ -56,6 +62,8 @@ R_RING_PREFIX = bytes.fromhex('5a3a0210')
 # 5a 3c 04 01 00 02 <dB>; the write is the same with 00 instead of 01 (payloads/raw/g6-recording-mic-boost-*db)
 R_MIC_BOOST_PREFIX = bytes.fromhex('5a3c0401')
 MIC_BOOST_DB = (0, 10, 20, 30)
+# 5a 26 0b 08 ff ff <bitmask>: 0x01 SBX, 0x02 Scout Mode, 0x04 Voice Clarity (g6_spec.modes)
+R_PROCESSING_MODE_PREFIX = bytes.fromhex('5a260b08ffff')
 
 OUTPUT_BY_CODE = {0x02: 'Speakers', 0x04: 'Headphones'}
 
@@ -80,14 +88,26 @@ SBX_EFFECTS = {  # name -> (switch id, level id); level is 0.0-1.0, reported as 
     'dialog_plus': (AudioFeature.DIALOG_PLUS_TOGGLE, AudioFeature.DIALOG_PLUS_SLIDER),
 }
 SMART_VOLUME_MODE_BY_VALUE = {0.0: 'Normal', 1.0: 'Loud', 2.0: 'Night'}  # see SmartVolumeSpecialHex
-EQ_ENABLE_ID = 0x09
-EQ_PREAMP_ID = 0x0A
-EQ_BAND_IDS = tuple(range(0x0B, 0x15))
-EQ_BAND_FREQS = ('31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k')  # Hz, as labelled in SBC
+EQ_BAND_IDS = tuple(_EQ_BAND_IDS_BY_FREQ[f] for f in EQ_BAND_FREQS)
+
+# Recording parameters: same scheme with 0x95 (ids as in the g6_spec.recording write builders).
+RECORDING_PARAM = 0x95
+REC_AEC_ID = 0x00
+REC_NOISE_REDUCTION_ID = 0x04  # SBC "Noise Reduction"; the --recording-voice-clarity switch writes this
+REC_NOISE_REDUCTION_LEVEL_ID = 0x05
+REC_MIC_EQ_ID = 0x13
+REC_MIC_SMART_VOLUME_ID = 0x2C
+REC_MIC_EQ_BAND_IDS = tuple(range(0x14, 0x1C))
+# preset name -> band gains (dB), decoded from the float32 LE bytes of the write builders
+MIC_EQ_PRESET_GAINS = {
+    preset.name: tuple(round(struct.unpack('<f', bytes.fromhex(preset.value[f'{i:02X}']))[0], 2)
+                       for i in REC_MIC_EQ_BAND_IDS)
+    for preset in MicrophoneEqualizerPreset
+}
 
 
-def playback_param_query(param_id: int) -> bytes:
-    return bytes([0x5A, 0x11, 0x03, 0x01, PLAYBACK_PARAM, param_id])
+def playback_param_query(param_id: int, group: int = PLAYBACK_PARAM) -> bytes:
+    return bytes([0x5A, 0x11, 0x03, 0x01, group, param_id])
 
 
 DAC_FILTER_LABELS = {
@@ -116,6 +136,12 @@ class DeviceStatus:
     eq_preamp_db: Optional[float] = None
     eq_bands_db: Optional[dict] = None  # band label (Hz) -> dB
     mic_boost_db: Optional[int] = None  # 0 | 10 | 20 | 30
+    sbx_enabled: Optional[bool] = None  # SBX master switch (mode register)
+    scout_mode: Optional[bool] = None
+    voice_clarity: Optional[bool] = None  # recording effects active (mode register)
+    # recording effects: name -> bool, noise_reduction_level 0-100
+    recording: Optional[dict] = None
+    mic_eq_preset: Optional[str] = None  # MicrophoneEqualizerPreset name, or the gains if none matches
     # volumes/mutes via the OS audio stack (g6_os_audio.read_mixer), Windows only for now
     mixer: Optional[dict] = None
 
@@ -182,9 +208,9 @@ def _parse_on_off(r: Optional[bytes], prefix: bytes) -> Optional[bool]:
     return r[4] == 0x01
 
 
-def parse_playback_param(r: Optional[bytes], param_id: int) -> Optional[float]:
-    """float32 value of playback parameter ``param_id``; None if the answer is for another parameter."""
-    prefix = bytes([0x5A, 0x11, 0x08, 0x01, 0x00, PLAYBACK_PARAM, param_id])
+def parse_playback_param(r: Optional[bytes], param_id: int, group: int = PLAYBACK_PARAM) -> Optional[float]:
+    """float32 value of parameter ``param_id`` (playback 0x96 / recording 0x95); None for a foreign answer."""
+    prefix = bytes([0x5A, 0x11, 0x08, 0x01, 0x00, group, param_id])
     if not r or len(r) < 11 or r[:7] != prefix:
         return None
     value = struct.unpack_from('<f', r, 7)[0]
@@ -204,6 +230,26 @@ def parse_mic_boost(r: Optional[bytes]) -> Optional[int]:
     if not r or len(r) < 7 or r[:4] != R_MIC_BOOST_PREFIX or r[6] not in MIC_BOOST_DB:
         return None
     return r[6]
+
+
+def parse_processing_mode(r: Optional[bytes]) -> Optional[dict]:
+    """SBX / Scout Mode / Voice Clarity from the mode register; all off in Direct mode."""
+    if not r or len(r) < 7 or r[:6] != R_PROCESSING_MODE_PREFIX:
+        return None
+    mask = r[6]
+    return {'sbx_enabled': bool(mask & MODE_BIT_SBX), 'scout_mode': bool(mask & MODE_BIT_SCOUT),
+            'voice_clarity': bool(mask & MODE_BIT_VOICE_CLARITY)}
+
+
+def match_mic_eq_preset(gains: tuple) -> Optional[str]:
+    """Name of the MicrophoneEqualizerPreset with these band gains, else the gains as text."""
+    if not gains or any(g is None for g in gains):
+        return None
+    rounded = tuple(round(g, 2) for g in gains)
+    for name, preset_gains in MIC_EQ_PRESET_GAINS.items():
+        if preset_gains == rounded:
+            return name
+    return ' '.join(f'{g:g}' for g in rounded)
 
 
 def parse_rgb(r: Optional[bytes]) -> Optional[bool]:
@@ -264,6 +310,27 @@ def collect_status(query: Transport) -> DeviceStatus:
         status.eq_bands_db = bands
 
     status.mic_boost_db = parse_mic_boost(query(Q_MIC_BOOST))
+
+    modes = parse_processing_mode(query(Q_PROCESSING_MODE))
+    if modes:
+        status.sbx_enabled = modes['sbx_enabled']
+        status.scout_mode = modes['scout_mode']
+        status.voice_clarity = modes['voice_clarity']
+
+    def rec(param_id: int) -> Optional[float]:
+        return parse_playback_param(query(playback_param_query(param_id, RECORDING_PARAM)), param_id,
+                                    RECORDING_PARAM)
+
+    recording = {
+        'noise_reduction': _switch(rec(REC_NOISE_REDUCTION_ID)),
+        'noise_reduction_level': _percent(rec(REC_NOISE_REDUCTION_LEVEL_ID)),
+        'acoustic_echo_cancellation': _switch(rec(REC_AEC_ID)),
+        'smart_volume': _switch(rec(REC_MIC_SMART_VOLUME_ID)),
+        'mic_eq': _switch(rec(REC_MIC_EQ_ID)),
+    }
+    if any(v is not None for v in recording.values()):
+        status.recording = recording
+    status.mic_eq_preset = match_mic_eq_preset(tuple(rec(i) for i in REC_MIC_EQ_BAND_IDS))
     return status
 
 
