@@ -24,7 +24,7 @@ classifiers = [
 keywords = ["SoundBlaster X G6", "Creative", "USB HID", "CLI"]
 
 [project.optional-dependencies]
-gui = ["customtkinter>=5.2"]
+gui = ["customtkinter>=6.0.0"]
 test = ["pytest>=8"]
 
 [project.scripts]
