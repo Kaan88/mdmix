@@ -50,6 +50,7 @@ pub fn render(args: &ShotArgs) -> Bitmap {
             scroll: 0.0,
             maximized: false,
             hover: None,
+            pointer: None,
             pressed: None,
             toast: None,
             frosted: args.backdrop != Backdrop::Off,
@@ -69,20 +70,96 @@ pub fn render(args: &ShotArgs) -> Bitmap {
             })
             .collect::<Vec<_>>();
     }
-    if args.backdrop == Backdrop::Off {
+    if args.backdrop == Backdrop::Off && !args.desk {
         return bmp;
     }
     over_wallpaper(
         &bmp,
         &areas,
         Key::new(frost::key_colour(&pal), frost::veil(args.backdrop)),
+        Sim {
+            tint: match args.backdrop {
+                // The system's own tint of Mica, as the mockup has it: the key colour at .80 over the blurred wallpaper.
+                Backdrop::Mica => Some((frost::key_colour(&pal), 0.80)),
+                _ => None,
+            },
+            margin: if args.desk {
+                (DESK_MARGIN * args.scale).round() as usize
+            } else {
+                0
+            },
+            scale: args.scale,
+            chrome: args.backdrop != Backdrop::Off,
+        },
     )
 }
 
-/// The frame as the window would hand it to the compositor, laid over a sample wallpaper: a soft diagonal blend of
-/// two colours, standing in for what Mica or Acrylic shows.
-fn over_wallpaper(bmp: &Bitmap, chrome: &[(usize, usize, usize, usize)], key: Key) -> Bitmap {
+/// The room round the window in a `--desk` shot, as the mockup's desktop padding.
+const DESK_MARGIN: f32 = 18.0;
+/// The window's corner radius in a `--desk` shot (the mockup's Round).
+const DESK_RADIUS: f32 = 8.0;
+
+/// How a shot stands in for what the system does round the frame.
+struct Sim {
+    /// The tint the system lays over the blurred wallpaper (Mica).
+    tint: Option<(mdshared_ui::gfx::Rgb, f32)>,
+    /// Desktop showing round the window, with its rounded corners and shadow.
+    margin: usize,
+    /// The chrome is frosted: the wallpaper shows through it.
+    chrome: bool,
+    scale: f32,
+}
+
+/// The sample wallpaper at (`u`, `v`) in 0..1: the mockup's night one, blurred (a diagonal blend of dark blue, purple,
+/// plum and rust, with a teal pool at the bottom left).
+fn wallpaper(u: f32, v: f32) -> [f32; 3] {
+    let hex = |c: u32| {
+        [
+            (c >> 16) as f32,
+            ((c >> 8) & 0xff) as f32,
+            (c & 0xff) as f32,
+        ]
+    };
+    let stops = [
+        (0.0, hex(0x0b1026)),
+        (0.45, hex(0x27124a)),
+        (0.75, hex(0x5a1d3c)),
+        (1.0, hex(0xb3472c)),
+    ];
+    let t = (0.5 + (u - 0.5) * 0.342 + (v - 0.5) * 0.94).clamp(0.0, 1.0);
+    let mut c = stops[3].1;
+    for w in stops.windows(2) {
+        if t <= w[1].0 {
+            let k = (t - w[0].0) / (w[1].0 - w[0].0);
+            c = [0, 1, 2].map(|i| w[0].1[i] + (w[1].1[i] - w[0].1[i]) * k);
+            break;
+        }
+    }
+    let d = ((u - 0.06) / 0.25).powi(2) + ((v - 0.7) / 0.7).powi(2);
+    let pool = (1.0 - d).clamp(0.0, 1.0) * 0.85;
+    let teal = hex(0x14506e);
+    [0, 1, 2].map(|i| c[i] + (teal[i] - c[i]) * pool)
+}
+
+/// The signed distance from (`x`, `y`) to a `w` x `h` rounded rectangle at the origin: negative inside.
+fn rounded_sdf(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
+    let (qx, qy) = (
+        (x - w / 2.0).abs() - (w / 2.0 - r),
+        (y - h / 2.0).abs() - (h / 2.0 - r),
+    );
+    qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
+}
+
+/// The frame as the window would hand it to the compositor, laid over a sample wallpaper that stands in for what
+/// Mica or Acrylic shows (the real one is the system's blur and is only seen in the running app).
+fn over_wallpaper(
+    bmp: &Bitmap,
+    chrome: &[(usize, usize, usize, usize)],
+    key: Key,
+    sim: Sim,
+) -> Bitmap {
     let (w, h) = (bmp.width as usize, bmp.height as usize);
+    let m = sim.margin;
     let mut px: Vec<u32> = bmp
         .pixels
         .as_chunks::<4>()
@@ -90,24 +167,52 @@ fn over_wallpaper(bmp: &Bitmap, chrome: &[(usize, usize, usize, usize)], key: Ke
         .iter()
         .map(|c| u32::from_le_bytes(*c))
         .collect();
-    for a in chrome {
-        frost::key_out(&key, &mut px, w, *a);
+    if sim.chrome {
+        for a in chrome {
+            frost::key_out(&key, &mut px, w, *a);
+        }
     }
-    let mut out = Bitmap::new(bmp.width, bmp.height);
-    let (from, to) = ([70.0_f32, 130.0, 200.0], [225.0_f32, 150.0, 170.0]);
-    for y in 0..h {
-        for x in 0..w {
-            let t = (x as f32 / w as f32 * 0.6 + y as f32 / h as f32 * 0.4).clamp(0.0, 1.0);
-            let wall = [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t);
-            let v = px[y * w + x];
-            let a = (v >> 24) as f32 / 255.0;
-            // Premultiplied: the pixel's colour plus what it lets through.
-            let c = [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff].map(|c| c as f32);
-            let o = (y * w + x) * 4;
-            for i in 0..3 {
-                let v = (c[i] + (1.0 - a) * wall[i]).round().clamp(0.0, 255.0) as u8;
+    let (cw, ch) = (w + 2 * m, h + 2 * m);
+    let mut out = Bitmap::new(cw as u32, ch as u32);
+    for y in 0..ch {
+        for x in 0..cw {
+            let mut wall = wallpaper(x as f32 / cw as f32, y as f32 / ch as f32);
+            if let Some((k, a)) = sim.tint {
+                wall = [0, 1, 2].map(|i| wall[i] + (f32::from(k[i]) - wall[i]) * a);
+            }
+            let o = (y * cw + x) * 4;
+            let (wx, wy) = (x as f32 + 0.5 - m as f32, y as f32 + 0.5 - m as f32);
+            let mut rgb = wall;
+            if m > 0 {
+                // The desktop under the window: darker towards the window, as its shadow (36 px, drop 6, peak .35).
+                let k = sim.scale;
+                let d = rounded_sdf(wx, wy - 6.0 * k, w as f32, h as f32, DESK_RADIUS * k).max(0.0);
+                let shade = 0.35 * (-(d * d) / (2.0 * 12.0 * k * 12.0 * k)).exp();
+                rgb = rgb.map(|c| c * (1.0 - shade));
+            }
+            let inside = rounded_sdf(
+                wx,
+                wy,
+                w as f32,
+                h as f32,
+                if m > 0 { DESK_RADIUS * sim.scale } else { 0.0 },
+            );
+            let cover = if m > 0 {
+                (0.5 - inside).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            if cover > 0.0 {
+                let v = px[(y - m) * w + (x - m)];
+                let a = (v >> 24) as f32 / 255.0;
+                // Premultiplied: the pixel's colour plus what it lets through.
+                let c = [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff].map(|c| c as f32);
+                let win = [0, 1, 2].map(|i| c[i] + (1.0 - a) * wall[i]);
+                rgb = [0, 1, 2].map(|i| rgb[i] + (win[i] - rgb[i]) * cover);
+            }
+            for (i, c) in rgb.iter().enumerate() {
                 // The bitmap is BGRA.
-                out.pixels[o + 2 - i] = v;
+                out.pixels[o + 2 - i] = c.round().clamp(0.0, 255.0) as u8;
             }
             out.pixels[o + 3] = 255;
         }
@@ -153,12 +258,20 @@ pub fn all(dir: &Path) -> Result<Vec<PathBuf>, String> {
             sample: Sample::Away,
             ..ShotArgs::new(Page::Mixer, dark)
         })?;
-        // Frosted chrome, both kinds.
-        for backdrop in [Backdrop::Mica, Backdrop::Acrylic] {
+        // The chrome without a backdrop, and Acrylic (Mica is the default of every other shot).
+        for backdrop in [Backdrop::Off, Backdrop::Acrylic] {
             shot(ShotArgs {
                 backdrop,
                 sample: Sample::Busy,
                 ..ShotArgs::new(Page::Playback, dark)
+            })?;
+        }
+        // The window on the desktop, to set beside the mockup.
+        for page in [Page::Playback, Page::Mixer, Page::Sbx] {
+            shot(ShotArgs {
+                desk: true,
+                sample: Sample::Busy,
+                ..ShotArgs::new(page, dark)
             })?;
         }
         // The dialog's two pages.
@@ -204,7 +317,10 @@ mod tests {
 
     #[test]
     fn a_frosted_shot_lets_the_wallpaper_through_the_chrome_only() {
-        let flat = render(&ShotArgs::new(Page::Sbx, true));
+        let flat = render(&ShotArgs {
+            backdrop: Backdrop::Off,
+            ..ShotArgs::new(Page::Sbx, true)
+        });
         let mica = render(&ShotArgs {
             backdrop: Backdrop::Mica,
             ..ShotArgs::new(Page::Sbx, true)

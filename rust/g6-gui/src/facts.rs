@@ -54,6 +54,13 @@ pub fn drop_direct_zeros(s: &mut DeviceStatus) {
     }
 }
 
+/// The labels of the DAC filter's four choices.
+pub fn filter_labels() -> Vec<&'static str> {
+    PlaybackFilter::ALL.iter().map(|f| f.label()).collect()
+}
+
+pub const MIC_EQ_LABELS: [&str; 2] = ["Preset 10", "Custom"];
+
 pub fn filter_label(s: &DeviceStatus) -> Option<String> {
     let name = s.dac_filter.as_deref()?;
     Some(match PlaybackFilter::from_name(name) {

@@ -12,7 +12,8 @@ use mdshared_ui::glyph;
 use crate::facts::{self, DASH};
 use crate::icons;
 use crate::kit::{
-    self, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, dimmed, live_seg, row, seg, value,
+    self, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, dd, dimmed, live_seg, row, seg, seg_sm,
+    value,
 };
 use crate::model::{MONITORING, MixerView, Model, Page, RECORDING, Strip};
 use crate::prefs::{Prefs, Theme};
@@ -70,19 +71,17 @@ pub fn tags(page: Page, m: &Model) -> Vec<(String, Tone)> {
     match page {
         Page::Sbx => {
             if s.direct_mode == Some(true) {
-                out.push(("Direct mode".into(), Tone::Lit));
+                out.push(("DIRECT".into(), Tone::Lit));
             }
             if s.sbx_enabled == Some(true) {
                 out.push(("SBX".into(), Tone::Lit));
             }
             if s.scout_mode == Some(true) {
-                out.push(("Scout Mode".into(), Tone::Lit));
+                out.push(("SCOUT".into(), Tone::Lit));
             }
         }
-        Page::Equalizer if s.eq_enabled == Some(true) => out.push(("On".into(), Tone::Lit)),
-        Page::Playback if s.direct_mode == Some(true) => {
-            out.push(("Direct mode".into(), Tone::Lit))
-        }
+        Page::Equalizer if s.eq_enabled == Some(true) => out.push(("ON".into(), Tone::Lit)),
+        Page::Playback if s.direct_mode == Some(true) => out.push(("DIRECT".into(), Tone::Lit)),
         _ => {}
     }
     out
@@ -145,10 +144,10 @@ fn sbx(m: &Model) -> Vec<Card<'static>> {
     let effects_off = bypassed || s.sbx_enabled == Some(false);
     for (effect, name, help) in EFFECTS {
         let st = s.sbx_effect(effect);
-        let mut items = vec![row("Level", percent_slider(st.and_then(|e| e.level))).item()];
+        let mut items = vec![row("", percent_slider(st.and_then(|e| e.level))).item()];
         if effect == SbxEffect::SmartVolume {
             let sel = facts::index_of(&facts::SMART_MODES, s.smart_volume_mode.as_deref());
-            items.push(row("Mode", seg(&facts::SMART_MODES, sel)).item());
+            items.push(row("Mode", seg_sm(&facts::SMART_MODES, sel)).item());
         }
         items.push(Item::Note(help.into()));
         out.push(
@@ -175,7 +174,7 @@ fn equalizer(m: &Model) -> Vec<Card<'static>> {
     let bands = s.eq_bands_db.unwrap_or([None; 10]);
     let pre = s.eq_preamp_db;
     let off = on == Some(false);
-    let preset_row = row("Preset", Ctl::Dropdown(preset))
+    let preset_row = row("Preset", dd(preset, &[]))
         .help(&format!(
             "A preset has one curve per output. This is its {which} curve."
         ))
@@ -210,7 +209,7 @@ fn eq_curve(
     off: bool,
 ) {
     let pal = env.pal;
-    let dim = dimmed(&pal, pal.popup);
+    let dim = if off { dimmed(&pal, pal.popup) } else { pal };
     let line = if off { dim.muted } else { pal.accent };
     let area = Rect::new(r.x + 34.0, r.y + 8.0, r.w - 34.0 - 4.0, r.h - 16.0);
     p.frame(area, 6.0, pal.field, pal.popup_line);
@@ -309,11 +308,7 @@ fn eq_bands(
     off: bool,
 ) {
     let pal = env.pal;
-    let dim = if off {
-        dimmed(&dimmed(&pal, pal.popup), pal.popup)
-    } else {
-        dimmed(&pal, pal.popup)
-    };
+    let dim = if off { dimmed(&pal, pal.popup) } else { pal };
     let labels = facts::band_labels();
     let n = 11;
     let col_w = r.w / n as f32;
@@ -409,7 +404,7 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
         row("Dynamic range", seg(&facts::DECODER_MODES, dec))
             .help("For Dolby Digital input.")
             .item(),
-        row("DAC filter", Ctl::Dropdown(filter)).item(),
+        row("DAC filter", dd(filter, &facts::filter_labels())).item(),
     ];
     if m.direct() && (s.decoder_mode.is_none() || s.dac_filter.is_none()) {
         decoder.push(Item::Note(
@@ -478,31 +473,36 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
                  strips: Vec<(String, Option<Strip>)>,
                  head: Option<Option<bool>>,
                  wide: bool| {
-        let mut c = Card::new(title, Vec::new());
+        let names: Vec<String> = strips.iter().map(|(n, _)| n.clone()).collect();
+        let mut c = Card::new(title, Vec::new()).rack(names.clone(), wide);
         c.parts.clear();
         if let Some(h) = head {
-            c = c.head(h);
+            c = c.head(h).head_label("Mute mix");
         }
         c.then(Part::Draw(Draw {
-            h: 240.0,
-            f: Box::new(move |p, env, r| strips_rack(p, env, r, &strips, wide)),
+            h: 0.0,
+            f: Box::new(move |p, env, r| strips_rack(p, env, r, &strips, &names, wide)),
         }))
     };
     vec![
         group("Monitoring", mon, None, false),
         group("Recording sources", rec, None, false),
-        group("Playback · mute mix", master, Some(mix_muted), true),
+        group("Playback", master, Some(mix_muted), true),
         Card::new(
-            "Output and inputs",
+            "",
             vec![
-                row("Output", seg(&facts::OUTPUTS, facts::output_index(s))).item(),
-                row(
-                    "Speaker setup",
-                    seg(&facts::LAYOUTS, mx.as_ref().and_then(MixerView::layout_index)),
-                )
-                .item(),
-                row("Mic boost (dB)", seg(&facts::MIC_BOOSTS, facts::mic_boost_index(s))).item(),
-                toggle_row("Direct mode", s.direct_mode).item(),
+                Item::Inline(vec![
+                    ("Output".into(), seg_sm(&facts::OUTPUTS, facts::output_index(s))),
+                    (
+                        "Speaker setup".into(),
+                        seg_sm(&facts::LAYOUTS, mx.as_ref().and_then(MixerView::layout_index)),
+                    ),
+                    (
+                        "Mic boost (dB)".into(),
+                        seg_sm(&facts::MIC_BOOSTS, facts::mic_boost_index(s)),
+                    ),
+                    ("Direct mode".into(), Ctl::Toggle(s.direct_mode)),
+                ]),
                 Item::Note(if m.mixer.is_some() {
                     "Levels and mutes are the Windows ones (Core Audio). Monitoring strips only have a level in dB, so their faders have no position.".into()
                 } else {
@@ -514,50 +514,53 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
     ]
 }
 
+/// A group's channel strips (the mockup's `.strips`): name, meter and fader, reading, Mute. Left aligned, each as wide
+/// as the widest name needs on one line.
 fn strips_rack(
     p: &mut Painter,
     env: &mut Env,
     r: Rect,
     strips: &[(String, Option<Strip>)],
+    names: &[String],
     wide: bool,
 ) {
     let pal = env.pal;
-    let dim = dimmed(&pal, pal.popup);
-    let w = (r.w / strips.len().max(1) as f32)
-        .min(if wide { 92.0 } else { 64.0 })
-        .floor();
-    let total = w * strips.len() as f32;
-    let x0 = r.x + ((r.w - total) / 2.0).max(0.0);
+    let w = kit::strip_w(p, names, wide);
     for (i, (name, st)) in strips.iter().enumerate() {
-        let col = Rect::new(x0 + w * i as f32, r.y + 4.0, w, r.h - 4.0);
+        let col = Rect::new(r.x + w * i as f32, r.y, w, r.h);
         if i > 0 {
             let px = p.px().max(1.0);
             p.fill(Rect::new(col.x, col.y, px, col.h), pal.popup_line);
         }
-        let lines = kit::wrap(p, Face::Ui, 11.5, name, w - 6.0);
-        for (k, l) in lines.iter().take(2).enumerate() {
-            let y = col.y + 9.0 + 13.0 * k as f32 + if lines.len() == 1 { 6.0 } else { 0.0 };
-            p.text_center(
-                Face::Ui,
-                11.5,
-                Rect::new(col.x + 3.0, y - 7.0, w - 6.0, 14.0),
-                l,
-                dim.text,
-            );
-        }
-        // Meter (no source yet: empty), fader.
-        let fd = Rect::new(col.x, col.y + 32.0, w, col.h - 32.0 - 56.0);
-        let meter_w = 6.0;
-        let fader_w = 24.0;
+        // The name, on one line, in 28 px.
+        p.text_center(
+            Face::Ui,
+            kit::SIZE_SMALL,
+            Rect::new(col.x, col.y, w, 28.0),
+            name,
+            pal.text,
+        );
+        // Meter (no source yet: empty) and fader, then the reading and Mute.
+        let btn_h = 24.0;
+        let val_h = if wide { 24.0 } else { 18.0 };
+        let fd = Rect::new(
+            col.x,
+            col.y + 34.0,
+            w,
+            col.h - 34.0 - 6.0 - val_h - 6.0 - btn_h,
+        );
+        let meter_w = 5.0;
+        let fader_w = 28.0;
         let gap = 5.0;
         let stereo = if wide { 2.0 } else { 1.0 };
         let span_w = meter_w * stereo + gap * stereo + fader_w;
         let mut x = fd.x + (w - span_w) / 2.0;
         for _ in 0..stereo as usize {
-            p.rbox(
-                Rect::new(x, fd.y + 4.0, meter_w, fd.h - 8.0),
-                3.0,
+            p.frame(
+                Rect::new(x, fd.y + 7.0, meter_w, fd.h - 14.0),
+                2.0,
                 pal.field,
+                pal.popup_line,
             );
             x += meter_w + gap;
         }
@@ -565,38 +568,40 @@ fn strips_rack(
         let db = st.and_then(|s| s.db);
         vslider(
             p,
-            &dim,
+            &pal,
             Rect::new(x, fd.y, fader_w, fd.h),
             vol.map(|v| f32::from(v) / 100.0),
             false,
             pal.popup,
         );
+        env.hits.add(Hit::Inert, Rect::new(x, fd.y, fader_w, fd.h));
         let reading = match (vol, db) {
             (Some(v), _) => v.to_string(),
             (None, Some(d)) => facts::db_short(d),
             (None, None) => DASH.to_string(),
         };
         let (face, size) = if wide {
-            (Face::Semibold, 16.0)
+            (Face::Semibold, 17.0)
         } else {
-            (Face::Ui, 13.0)
+            (Face::Ui, kit::SIZE_VALUE)
         };
         p.text_center(
             face,
             size,
-            Rect::new(col.x, fd.bottom() + 4.0, w, 20.0),
+            Rect::new(col.x, fd.bottom() + 6.0, w, val_h),
             &reading,
-            dim.text,
+            pal.text,
         );
         let muted = st.and_then(|s| s.muted);
-        let btn = Rect::new(col.x + (w - 44.0) / 2.0, col.bottom() - 30.0, 44.0, 24.0);
-        let (fill, ink) = if muted == Some(true) {
-            (mix(pal.popup, pal.warn, 0.35), dim.text)
+        let btn = Rect::new(col.x + (w - 46.0) / 2.0, col.bottom() - btn_h, 46.0, btn_h);
+        let (fill, edge, ink) = if muted == Some(true) {
+            (pal.warn_bg, pal.warn, pal.warn)
         } else {
-            (mix(pal.popup, pal.text, 0.04), dim.muted)
+            (mix(pal.popup, pal.text, 0.04), pal.popup_line, pal.muted)
         };
-        p.frame(btn, 5.0, fill, dim.popup_line);
-        p.text_center(Face::Ui, 12.0, btn, "Mute", ink);
+        p.frame(btn, 5.0, fill, edge);
+        p.text_center(Face::Semibold, 11.0, btn, "Mute", ink);
+        env.hits.add(Hit::Inert, btn);
     }
 }
 
@@ -629,7 +634,10 @@ fn microphone(m: &Model) -> Vec<Card<'static>> {
     let mon_mic = m.mixer.as_ref().map(|v| v.monitoring[1]);
     let mut preset_row = row(
         "Mic EQ preset",
-        Ctl::Dropdown(facts::mic_eq_label(s).unwrap_or_else(|| DASH.into())),
+        dd(
+            facts::mic_eq_label(s).unwrap_or_else(|| DASH.into()),
+            &facts::MIC_EQ_LABELS,
+        ),
     )
     .child();
     if mic_eq == Some(false) {
@@ -703,7 +711,7 @@ fn lighting(m: &Model) -> Vec<Card<'static>> {
 
 fn light_ring(p: &mut Painter, env: &mut Env, r: Rect, on: Option<bool>) {
     let pal = env.pal;
-    let dim = dimmed(&pal, pal.popup);
+    let dim = pal;
     let c = (r.x + 56.0, r.cy());
     let disc = if pal.dark {
         [0x2a, 0x2a, 0x2e]
@@ -1125,11 +1133,30 @@ pub fn draw_chain(p: &mut Painter, env: &mut Env, area: Rect) -> f32 {
 
 fn draw_lane(p: &mut Painter, env: &mut Env, area: Rect, nodes: &[Node], playback: bool) -> f32 {
     let pal = env.pal;
-    let per_row = (((area.w + WIRE) / (NODE_MIN + WIRE)).floor() as usize).clamp(1, nodes.len());
+    // Every stage is as wide as the widest title needs (with its icon and its lamp or switch) and a good part of the
+    // longest second line; the lane wraps into more rows when that many do not fit side by side.
+    let mut need = NODE_MIN;
+    for n in nodes {
+        let tail = if n.switch.is_some() {
+            TOGGLE_SMALL.0 + 8.0
+        } else {
+            18.0
+        };
+        let head = p.measure(Face::Semibold, 13.0, &n.title)
+            + 24.0
+            + tail
+            + if n.icon.is_some() { 22.0 } else { 0.0 };
+        let sub = p.measure(Face::Ui, kit::SIZE_SMALL, &n.sub).min(150.0) + 24.0;
+        need = need.max(head).max(sub);
+    }
+    let need = need.ceil().min(area.w);
+    let per_row = (((area.w + WIRE) / (need + WIRE)).floor() as usize).clamp(1, nodes.len());
+    // Rows of an even length, not a full row and a stray stage.
+    let per_row = nodes.len().div_ceil(nodes.len().div_ceil(per_row));
     let in_row = per_row.min(nodes.len());
     let node_w = ((area.w - WIRE * (in_row - 1) as f32) / in_row as f32)
         .floor()
-        .min(210.0);
+        .min(need.max(210.0));
     let direct = env.model.direct();
     let mut rows = 0;
     // Positions of SBX's neighbours' wires, for the bypass.
@@ -1233,7 +1260,7 @@ fn draw_node(p: &mut Painter, env: &mut Env, n: &Node, r: Rect) {
     };
     match n.switch {
         Some(on) => {
-            let dim = dimmed(&pal, pal.popup);
+            let dim = pal;
             kit::toggle(
                 p,
                 &dim,

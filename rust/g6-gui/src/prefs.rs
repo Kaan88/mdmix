@@ -82,7 +82,8 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             theme: Theme::System,
-            backdrop: Backdrop::Off,
+            // The mockup's default. Where the system shows no backdrop the toolkit falls back to the flat chrome.
+            backdrop: Backdrop::Mica,
             corners: Corners::Round,
             page: Page::Sbx,
             size: None,

@@ -6,7 +6,6 @@
 use mdshared_ui::chrome::button_fill;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
-use mdshared_ui::segments;
 use mdshared_ui::theme::Palette;
 
 use crate::model::{Model, Page};
@@ -26,6 +25,8 @@ pub enum Hit {
     Corners(usize),
     /// The empty part of the title row: drags the window.
     Drag,
+    /// A device control that step G2 draws but does not act on: the pointer says so and a tip explains.
+    Inert,
 }
 
 /// The regions the last frame drew, in drawing order; the one drawn last is on top.
@@ -54,6 +55,11 @@ impl Hits {
                 self.0.push((hit, Rect::new(x0, y0, x1 - x0, y1 - y0)));
             }
         }
+    }
+
+    /// The region under the point and what it does.
+    pub fn at_rect(&self, x: f32, y: f32) -> Option<(Hit, Rect)> {
+        self.0.iter().rev().find(|(_, r)| r.contains(x, y)).copied()
     }
 
     pub fn at(&self, x: f32, y: f32) -> Option<Hit> {
@@ -93,13 +99,15 @@ impl Env<'_> {
     }
 }
 
-/// The palette of a disabled control: text, accent and edges drawn part of the way to the ground they sit on.
+/// The palette of a control that is out of use (its effect is bypassed or its switch is off): text, accent and edges
+/// drawn part of the way to the ground they sit on, as the mockup's `.off` (opacity .45).
 pub fn dimmed(pal: &Palette, ground: Rgb) -> Palette {
     let f = |c: Rgb, t: f32| mix(c, ground, t);
     Palette {
-        text: f(pal.text, 0.42),
-        muted: f(pal.muted, 0.40),
+        text: f(pal.text, 0.50),
+        muted: f(pal.muted, 0.50),
         accent: f(pal.accent, 0.55),
+        on_accent: f(pal.on_accent, 0.30),
         field: f(pal.field, 0.30),
         line: f(pal.line, 0.25),
         popup_line: f(pal.popup_line, 0.25),
@@ -108,11 +116,34 @@ pub fn dimmed(pal: &Palette, ground: Rgb) -> Palette {
     }
 }
 
+/// The chrome's palette. Over a backdrop the chrome's ground is no longer one known colour, so its secondary text is
+/// written in the full text colour (the mockup does the same under `data-frost`).
+pub fn chrome_pal(pal: &Palette, frosted: bool) -> Palette {
+    if frosted {
+        Palette {
+            muted: pal.text,
+            ..*pal
+        }
+    } else {
+        *pal
+    }
+}
+
+// ---- the mockup's type scale ------------------------------------------------------------------
+
+pub const SIZE_H2: f32 = 17.0;
+pub const SIZE_CARD: f32 = 13.5;
+pub const SIZE_LABEL: f32 = 13.5;
+pub const SIZE_SMALL: f32 = 11.5;
+pub const SIZE_VALUE: f32 = 12.5;
+pub const SIZE_BODY: f32 = 13.0;
+
 // ---- controls ---------------------------------------------------------------------------------
 
 pub const TOGGLE_W: f32 = 40.0;
 pub const TOGGLE_H: f32 = 20.0;
-pub const SEG_H: f32 = segments::SEGMENT_H;
+pub const SEG_H: f32 = 28.0;
+pub const SEG_H_SM: f32 = 24.0;
 pub const CTL_H: f32 = 28.0;
 
 /// The switch of the settings dialog: a pill with the knob at the end that says on. `None` is a state not read: a dash.
@@ -137,6 +168,82 @@ pub fn toggle(p: &mut Painter, pal: &Palette, r: Rect, on: Option<bool>) {
             pal.muted,
         );
     }
+}
+
+/// The mockup's segmented choice: a field with a line edge and 1 px of room inside, a button per option (13 px of
+/// room each side, 9 for the small kind), the chosen one filled with the accent in the semibold face.
+fn seg_metrics(small: bool) -> (f32, f32, f32) {
+    // (text size, side room, height)
+    if small {
+        (12.0, 9.0, SEG_H_SM)
+    } else {
+        (SIZE_BODY, 13.0, SEG_H)
+    }
+}
+
+/// The kind of a segmented choice: the small one is 24 high; a filled one has equal buttons.
+#[derive(Clone, Copy, Debug)]
+pub struct SegKind {
+    pub small: bool,
+    pub fill: bool,
+}
+
+/// The width a segmented choice wants: every label measured in the semibold face plus its side room, and the edge.
+pub fn seg_width(p: &mut Painter, labels: &[&str], small: bool) -> f32 {
+    let (size, pad, _) = seg_metrics(small);
+    4.0 + labels
+        .iter()
+        .map(|l| p.measure(Face::Semibold, size, l) + 2.0 * pad)
+        .sum::<f32>()
+}
+
+/// Draws a segmented choice into `r` and returns the rectangle of each button. Buttons are as wide as their text and
+/// room; extra width goes to all of them alike (`fill`: they are equal, as the mockup's `.seg.fill`).
+pub fn draw_seg(
+    p: &mut Painter,
+    pal: &Palette,
+    r: Rect,
+    labels: &[&str],
+    sel: Option<usize>,
+    hovered: Option<usize>,
+    kind: SegKind,
+) -> Vec<Rect> {
+    let SegKind { small, fill } = kind;
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    let (size, pad, _) = seg_metrics(small);
+    p.frame(r, 6.0, pal.field, pal.line);
+    let inner = r.inset(2.0);
+    let n = labels.len() as f32;
+    let want: Vec<f32> = labels
+        .iter()
+        .map(|l| p.measure(Face::Semibold, size, l) + 2.0 * pad)
+        .collect();
+    let total: f32 = want.iter().sum();
+    let extra = (inner.w - total) / n;
+    let mut x = inner.x;
+    let mut rects = Vec::new();
+    for (k, label) in labels.iter().enumerate() {
+        let w = if fill {
+            inner.w / n
+        } else {
+            (want[k] + extra).max(0.0)
+        };
+        let seg = Rect::new(x, inner.y, w, inner.h);
+        x += w;
+        if sel == Some(k) {
+            p.rbox(seg, 4.0, pal.accent);
+            p.text_center(Face::Semibold, size, seg, label, pal.on_accent);
+        } else {
+            if hovered == Some(k) {
+                p.rbox(seg, 4.0, pal.hover);
+            }
+            p.text_center(Face::Ui, size, seg, label, pal.text);
+        }
+        rects.push(seg);
+    }
+    rects
 }
 
 /// A horizontal slider: a groove, a fill from the left (or from the middle) and a knob. `frac` is 0 to 1; `None`
@@ -168,12 +275,17 @@ pub fn slider(
     );
 }
 
+/// The width of a slider's reading ("34", "+2.5 dB"): tabular figures, at least 34 wide.
+pub fn reading_w(p: &mut Painter, reading: &str) -> f32 {
+    p.measure(Face::Ui, SIZE_VALUE, reading).max(34.0)
+}
+
 /// A dropdown as it looks closed: the value and a chevron.
 pub fn dropdown(p: &mut Painter, pal: &Palette, r: Rect, text: &str) {
     p.frame(r, 6.0, pal.field, pal.line);
     p.text(
         Face::Ui,
-        13.0,
+        SIZE_BODY,
         r.x + 10.0,
         r.cy(),
         text,
@@ -183,25 +295,35 @@ pub fn dropdown(p: &mut Painter, pal: &Palette, r: Rect, text: &str) {
     p.icon(glyph::DOWN, 10.0, r.right() - 14.0, r.cy(), pal.muted);
 }
 
+/// The width a dropdown wants for `text`: the text, 10 px before it and 26 after it for the chevron.
+pub fn dropdown_w(p: &mut Painter, text: &str) -> f32 {
+    (p.measure(Face::Ui, SIZE_BODY, text) + 36.0 + 2.0).ceil()
+}
+
 /// A button. `live` buttons answer the pointer; the others are drawn quiet.
 pub fn button(p: &mut Painter, pal: &Palette, r: Rect, label: &str, hovered: bool, pressed: bool) {
     let fill =
         button_fill(pal, hovered, pressed, false, false).unwrap_or(mix(pal.popup, pal.text, 0.04));
     p.frame(r, 5.0, fill, pal.popup_line);
-    p.text_center(Face::Ui, 13.0, r, label, pal.text);
+    p.text_center(Face::Ui, SIZE_BODY, r, label, pal.text);
 }
 
 pub fn button_w(p: &mut Painter, label: &str) -> f32 {
-    (p.measure(Face::Ui, 13.0, label) + 28.0).round()
+    (p.measure(Face::Ui, SIZE_BODY, label) + 28.0 + 2.0).round()
 }
 
-/// A small label: "In use", "SBX", "Not connected". `warn` draws it in the warning colours.
+/// The width of a badge with `text`.
+pub fn badge_w(p: &mut Painter, text: &str) -> f32 {
+    (p.measure(Face::Semibold, 10.5, text) + 14.0).ceil()
+}
+
+/// A small label: "In use", "SBX", "Not connected". Lit is the accent filled; warn the warning colours.
 pub fn badge(p: &mut Painter, pal: &Palette, x: f32, cy: f32, text: &str, tone: Tone) -> f32 {
-    let w = (p.measure(Face::Semibold, 10.5, text) + 12.0).ceil();
+    let w = badge_w(p, text);
     let r = Rect::new(x, cy - 9.0, w, 18.0);
     let (fill, edge, ink) = match tone {
         Tone::Quiet => (pal.popup, pal.popup_line, pal.muted),
-        Tone::Lit => (mix(pal.popup, pal.accent, 0.14), pal.accent, pal.accent),
+        Tone::Lit => (pal.accent, pal.accent, pal.on_accent),
         Tone::Warn => (pal.warn_bg, pal.warn, pal.warn),
     };
     p.frame(r, 4.0, fill, edge);
@@ -258,6 +380,7 @@ pub enum Ctl {
         labels: Vec<String>,
         sel: Option<usize>,
         live: Option<fn(usize) -> Hit>,
+        small: bool,
     },
     /// A slider with its reading. `frac` is 0 to 1, `None` when the value is not known.
     Slider {
@@ -265,7 +388,11 @@ pub enum Ctl {
         reading: String,
         from_middle: bool,
     },
-    Dropdown(String),
+    /// A dropdown showing `text`, wide enough for `widest` (the longest of its options) as well.
+    Dropdown {
+        text: String,
+        widest: String,
+    },
     /// Text, right aligned: a number, a version.
     Value {
         text: String,
@@ -294,6 +421,31 @@ pub enum Item {
     Sub(String),
     /// A line of small text.
     Note(String),
+    /// Labelled controls side by side, wrapping onto more lines when the card is narrow (the mockup's `.inserts`).
+    Inline(Vec<(String, Ctl)>),
+}
+
+/// Breaks the controls of an [`Item::Inline`] into lines: each entry's width, label and control, 20 px apart.
+fn inline_lines(p: &mut Painter, parts: &[(String, Ctl)], w: f32) -> Vec<Vec<(usize, f32)>> {
+    let mut lines: Vec<Vec<(usize, f32)>> = vec![Vec::new()];
+    let mut x = 0.0;
+    for (i, (label, ctl)) in parts.iter().enumerate() {
+        let (want, _) = ctl_want(p, ctl, w);
+        let lw = p.measure(Face::Ui, SIZE_VALUE, label);
+        let ew = lw + 8.0 + want;
+        let line = lines.last_mut().expect("one line");
+        if !line.is_empty() && x + ew > w {
+            lines.push(Vec::new());
+            x = 0.0;
+        }
+        lines.last_mut().expect("one line").push((i, ew));
+        x += ew + 20.0;
+    }
+    lines
+}
+
+fn inline_height(n: usize) -> f32 {
+    n as f32 * 28.0 + n.saturating_sub(1) as f32 * 8.0
 }
 
 pub fn row(label: &str, ctl: Ctl) -> RowSpec {
@@ -324,20 +476,42 @@ impl RowSpec {
     }
 }
 
-pub fn seg(labels: &[&str], sel: Option<usize>) -> Ctl {
+fn seg_ctl(
+    labels: &[&str],
+    sel: Option<usize>,
+    live: Option<fn(usize) -> Hit>,
+    small: bool,
+) -> Ctl {
     Ctl::Seg {
         labels: labels.iter().map(|s| s.to_string()).collect(),
         sel,
-        live: None,
+        live,
+        small,
     }
 }
 
+pub fn seg(labels: &[&str], sel: Option<usize>) -> Ctl {
+    seg_ctl(labels, sel, None, false)
+}
+
+/// The small kind (24 high): the mockup's `.seg.sm`.
+pub fn seg_sm(labels: &[&str], sel: Option<usize>) -> Ctl {
+    seg_ctl(labels, sel, None, true)
+}
+
 pub fn live_seg(labels: &[&str], sel: Option<usize>, hit: fn(usize) -> Hit) -> Ctl {
-    Ctl::Seg {
-        labels: labels.iter().map(|s| s.to_string()).collect(),
-        sel,
-        live: Some(hit),
-    }
+    seg_ctl(labels, sel, Some(hit), false)
+}
+
+/// A dropdown showing `text` that is wide enough for the longest of `options`.
+pub fn dd(text: impl Into<String>, options: &[&str]) -> Ctl {
+    let text = text.into();
+    let widest = options
+        .iter()
+        .chain(std::iter::once(&text.as_str()))
+        .max_by_key(|s| s.chars().count())
+        .map_or(String::new(), |s| s.to_string());
+    Ctl::Dropdown { text, widest }
 }
 
 pub fn value(text: impl Into<String>) -> Ctl {
@@ -360,15 +534,26 @@ pub enum Part<'a> {
     Draw(Draw<'a>),
 }
 
+/// A mixer group: a card that is as wide as its strips (the mockup's `.grp`), with a small capital title.
+pub struct Rack {
+    /// The names of the strips; the card is wide enough for the widest on one line.
+    pub names: Vec<String>,
+    /// A wide strip (the playback master) is at least [`MASTER_STRIP_W`].
+    pub master: bool,
+}
+
 pub struct Card<'a> {
     pub title: String,
     /// A switch in the header, as the mockup's cards have.
     pub head: Option<Option<bool>>,
+    /// What is written before the header's switch ("Mute mix").
+    pub head_label: Option<String>,
     pub parts: Vec<Part<'a>>,
     /// Takes the whole row of the grid.
     pub span: bool,
-    /// The whole card is out of use (its effect is bypassed): drawn fainter still.
+    /// The whole card is out of use (its effect is bypassed): drawn fainter.
     pub off: bool,
+    pub rack: Option<Rack>,
 }
 
 impl<'a> Card<'a> {
@@ -376,13 +561,19 @@ impl<'a> Card<'a> {
         Card {
             title: title.into(),
             head: None,
+            head_label: None,
             parts: vec![Part::Items(items)],
             span: false,
             off: false,
+            rack: None,
         }
     }
     pub fn head(mut self, on: Option<bool>) -> Card<'a> {
         self.head = Some(on);
+        self
+    }
+    pub fn head_label(mut self, label: &str) -> Card<'a> {
+        self.head_label = Some(label.into());
         self
     }
     pub fn span(mut self) -> Card<'a> {
@@ -393,6 +584,10 @@ impl<'a> Card<'a> {
         self.off = off;
         self
     }
+    pub fn rack(mut self, names: Vec<String>, master: bool) -> Card<'a> {
+        self.rack = Some(Rack { names, master });
+        self
+    }
     pub fn then(mut self, part: Part<'a>) -> Card<'a> {
         self.parts.push(part);
         self
@@ -400,74 +595,203 @@ impl<'a> Card<'a> {
 }
 
 pub const CARD_PAD: f32 = 16.0;
-pub const CARD_HEAD: f32 = 36.0;
+/// The card's header: 6 px of padding, the 40 px header with its line, and 4 px before the first row.
+pub const CARD_HEAD: f32 = 50.0;
+const CARD_HEAD_LINE: f32 = 47.0;
 pub const CARD_FOOT: f32 = 8.0;
 pub const GRID_GAP: f32 = 12.0;
 pub const COL_MIN: f32 = 280.0;
-const LABEL_SIZE: f32 = 13.5;
-const HELP_SIZE: f32 = 11.5;
 const HELP_LINE: f32 = 14.0;
 const CTL_GAP: f32 = 12.0;
+const RACK_H: f32 = 340.0;
+const RACK_HEAD: f32 = 34.0;
+pub const STRIP_W: f32 = 60.0;
+pub const MASTER_STRIP_W: f32 = 92.0;
 
-/// The width a control wants, before it is cut to what the row can give.
-fn ctl_width(p: &mut Painter, ctl: &Ctl) -> f32 {
+/// The width of each strip of a rack: at least the mockup's 60 (92 for the master), and wide enough for the widest
+/// name on one line.
+pub fn strip_w(p: &mut Painter, names: &[String], master: bool) -> f32 {
+    let widest = names
+        .iter()
+        .map(|n| p.measure(Face::Ui, SIZE_SMALL, n))
+        .fold(0.0_f32, f32::max);
+    (widest + 10.0)
+        .ceil()
+        .max(if master { MASTER_STRIP_W } else { STRIP_W })
+}
+
+/// What a control wants of a row: its width, and the least it can be squeezed to.
+fn ctl_want(p: &mut Painter, ctl: &Ctl, inner_w: f32) -> (f32, f32) {
     match ctl {
-        Ctl::Toggle(_) => TOGGLE_W,
-        Ctl::Seg { labels, .. } => {
+        Ctl::Toggle(_) => (TOGGLE_W, TOGGLE_W),
+        Ctl::Seg { labels, small, .. } => {
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-            segments::switch_width(p, &refs)
+            let w = seg_width(p, &refs, *small).ceil();
+            (w, w)
         }
-        Ctl::Slider { reading, .. } => 150.0 + 10.0 + p.measure(Face::Ui, 13.0, reading).max(40.0),
-        Ctl::Dropdown(t) => (p.measure(Face::Ui, 13.0, t) + 46.0).clamp(150.0, 250.0),
+        Ctl::Slider { reading, .. } => {
+            let rw = reading_w(p, reading);
+            let track = (inner_w * 0.5).clamp(110.0, 240.0);
+            (track + 10.0 + rw, 96.0 + 10.0 + rw)
+        }
+        Ctl::Dropdown { text, widest } => {
+            let w = dropdown_w(p, widest).max(dropdown_w(p, text)).max(90.0);
+            (w, w.min(130.0))
+        }
         Ctl::Value { text, mono } => {
             let face = if *mono { Face::Mono } else { Face::Ui };
-            p.measure(face, 13.0, text)
+            let w = p.measure(face, SIZE_VALUE, text).ceil();
+            (w, w.min(60.0))
         }
-        Ctl::Button { label, .. } => button_w(p, label),
+        Ctl::Button { label, .. } => {
+            let w = button_w(p, label);
+            (w, w)
+        }
     }
 }
 
-/// The room a row's control gets: what it wants, at most 62 % of the row.
-fn ctl_room(p: &mut Painter, r: &RowSpec, inner_w: f32) -> f32 {
-    let want = ctl_width(p, &r.ctl);
-    let indent = if r.child { 16.0 } else { 0.0 };
-    let label = p.measure(Face::Ui, LABEL_SIZE, &r.label) + indent + CTL_GAP;
-    // The label keeps the room it needs; the control keeps at least 40 % of the row.
-    let most = (inner_w - label).max(inner_w * 0.4);
-    want.min(most).max(TOGGLE_W.min(want))
+fn ctl_height(ctl: &Ctl) -> f32 {
+    match ctl {
+        Ctl::Toggle(_) => TOGGLE_H,
+        Ctl::Seg { small: true, .. } => SEG_H_SM,
+        Ctl::Seg { .. } | Ctl::Dropdown { .. } | Ctl::Button { .. } => 28.0,
+        Ctl::Slider { .. } | Ctl::Value { .. } => 28.0,
+    }
 }
 
-fn row_height(p: &mut Painter, r: &RowSpec, inner_w: f32) -> f32 {
+/// Where a row puts its label, help and control.
+struct RowLay {
+    h: f32,
+    /// The control goes under the label (it does not fit beside it).
+    stacked: bool,
+    ctl_w: f32,
+    /// Where the control begins in a stacked row, from the row's top.
+    ctl_y: f32,
+    lines: Vec<String>,
+    label_cy: f32,
+}
+
+fn badge_room(p: &mut Painter, r: &RowSpec) -> f32 {
+    r.badge.as_ref().map_or(0.0, |(t, _)| badge_w(p, t) + 8.0)
+}
+
+/// The mockup's row: the label takes the room it needs on one line and the control the rest; a control that cannot
+/// shrink to what is left, or a help text that would run past two lines beside it, goes under the label.
+fn layout_row(p: &mut Painter, r: &RowSpec, inner_w: f32) -> RowLay {
     let indent = if r.child { 16.0 } else { 0.0 };
-    let label_w = (inner_w - ctl_room(p, r, inner_w) - CTL_GAP - indent).max(40.0);
-    let lines = if r.help.is_empty() {
-        0
-    } else {
-        wrap(p, Face::Ui, HELP_SIZE, &r.help, label_w).len().min(3)
+    let avail = inner_w - indent;
+    let (want, min) = ctl_want(p, &r.ctl, avail);
+    let help = |p: &mut Painter, w: f32| {
+        if r.help.is_empty() {
+            Vec::new()
+        } else {
+            wrap(p, Face::Ui, SIZE_SMALL, &r.help, w.max(40.0))
+        }
     };
-    if lines == 0 {
-        34.0
+    let help_h = |n: usize| {
+        if n == 0 {
+            0.0
+        } else {
+            26.0 + HELP_LINE * n as f32
+        }
+    };
+    if r.label.is_empty() {
+        // A control with no label (an effect's level) has the whole row.
+        let w = match r.ctl {
+            Ctl::Slider { .. } | Ctl::Dropdown { .. } => avail,
+            _ => want.min(avail),
+        };
+        return RowLay {
+            h: 34.0,
+            stacked: false,
+            ctl_w: w,
+            ctl_y: 0.0,
+            lines: Vec::new(),
+            label_cy: 17.0,
+        };
+    }
+    let label_w = p.measure(Face::Ui, SIZE_LABEL, &r.label) + badge_room(p, r);
+    let room = avail - label_w - CTL_GAP;
+    let inline = if want <= room {
+        Some(want)
+    } else if min <= room {
+        Some(room)
     } else {
-        26.0 + HELP_LINE * lines as f32
+        None
+    };
+    if let Some(cw) = inline {
+        let lines = help(p, avail - cw - CTL_GAP);
+        if lines.len() <= 2 {
+            let h = if lines.is_empty() {
+                34.0
+            } else {
+                help_h(lines.len()).max(40.0)
+            };
+            return RowLay {
+                h,
+                stacked: false,
+                ctl_w: cw,
+                ctl_y: 0.0,
+                label_cy: if lines.is_empty() { h / 2.0 } else { 13.0 },
+                lines,
+            };
+        }
+    }
+    let lines = help(p, avail);
+    let head = if lines.is_empty() {
+        28.0
+    } else {
+        help_h(lines.len()) - 2.0
+    };
+    let ctl_h = ctl_height(&r.ctl).max(28.0);
+    RowLay {
+        h: head + ctl_h + 6.0,
+        stacked: true,
+        ctl_w: match r.ctl {
+            Ctl::Slider { .. } | Ctl::Dropdown { .. } => avail,
+            _ => want.min(avail),
+        },
+        ctl_y: head,
+        label_cy: if lines.is_empty() { 15.0 } else { 13.0 },
+        lines,
     }
 }
+
+const SUB_H: f32 = 35.0;
+/// The top padding of a card with no header.
+const BARE_TOP: f32 = 10.0;
 
 fn items_height(p: &mut Painter, items: &[Item], inner_w: f32) -> f32 {
     items
         .iter()
         .map(|it| match it {
-            Item::Row(r) => row_height(p, r, inner_w),
-            Item::Sub(_) => 28.0,
-            Item::Note(t) => {
-                8.0 + HELP_LINE * wrap(p, Face::Ui, HELP_SIZE, t, inner_w).len() as f32
-            }
+            Item::Row(r) => layout_row(p, r, inner_w).h,
+            Item::Sub(_) => SUB_H,
+            Item::Note(t) => 8.0 + 15.0 * wrap(p, Face::Ui, SIZE_SMALL, t, inner_w).len() as f32,
+            Item::Inline(parts) => inline_height(inline_lines(p, parts, inner_w).len()),
         })
         .sum()
 }
 
+fn rack_w(p: &mut Painter, card: &Card, rack: &Rack) -> f32 {
+    let strips = strip_w(p, &rack.names, rack.master) * rack.names.len() as f32 + 8.0;
+    let mut head = 12.0 + p.measure(Face::Semibold, 11.0, &card.title.to_uppercase()) + 12.0;
+    if card.head.is_some() {
+        head += 8.0 + TOGGLE_W;
+        if let Some(l) = &card.head_label {
+            head += 8.0 + p.measure(Face::Semibold, 11.0, l);
+        }
+    }
+    strips.max(head).ceil()
+}
+
 fn card_height(p: &mut Painter, card: &Card, w: f32) -> f32 {
+    if card.rack.is_some() {
+        return RACK_H;
+    }
     let inner = w - 2.0 * CARD_PAD;
-    CARD_HEAD
+    let bare = card.title.is_empty() && card.head.is_none();
+    (if bare { BARE_TOP } else { CARD_HEAD })
         + card
             .parts
             .iter()
@@ -479,32 +803,60 @@ fn card_height(p: &mut Painter, card: &Card, w: f32) -> f32 {
         + CARD_FOOT
 }
 
-/// Draws a row's control into `r` (its room, right aligned by the caller) and records its hits.
-fn draw_ctl(p: &mut Painter, env: &mut Env, pal: &Palette, ground: Rgb, ctl: &Ctl, r: Rect) {
+/// Draws a row's control into `r` and records it as inert unless it answers a click.
+fn draw_ctl(
+    p: &mut Painter,
+    env: &mut Env,
+    ground: Rgb,
+    pal: &Palette,
+    ctl: &Ctl,
+    r: Rect,
+    left: bool,
+) {
+    let place = |w: f32, h: f32| {
+        let w = w.min(r.w);
+        Rect::new(
+            if left { r.x } else { r.right() - w },
+            r.cy() - h / 2.0,
+            w,
+            h,
+        )
+    };
     match ctl {
-        Ctl::Toggle(on) => toggle(
-            p,
-            pal,
-            Rect::new(
-                r.right() - TOGGLE_W,
-                r.cy() - TOGGLE_H / 2.0,
-                TOGGLE_W,
-                TOGGLE_H,
-            ),
-            *on,
-        ),
-        Ctl::Seg { labels, sel, live } => {
+        Ctl::Toggle(on) => {
+            let b = place(TOGGLE_W, TOGGLE_H);
+            toggle(p, pal, b, *on);
+            env.hits.add(Hit::Inert, b);
+        }
+        Ctl::Seg {
+            labels,
+            sel,
+            live,
+            small,
+        } => {
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-            let w = segments::switch_width(p, &refs).min(r.w);
-            let seg_r = Rect::new(r.right() - w, r.cy() - SEG_H / 2.0, w, SEG_H);
+            let w = seg_width(p, &refs, *small).ceil();
+            let seg_r = place(w, if *small { SEG_H_SM } else { SEG_H });
             let hovered = live.and_then(|mk| (0..labels.len()).find(|&k| env.hover == Some(mk(k))));
-            let live_pal = env.pal;
-            let use_pal = if live.is_some() { &live_pal } else { pal };
-            let rects = segments::draw_segments(p, use_pal, seg_r, &refs, *sel, hovered);
-            if let Some(mk) = live {
-                for (k, rc) in rects.iter().enumerate() {
-                    env.hits.add(mk(k), *rc);
+            let rects = draw_seg(
+                p,
+                pal,
+                seg_r,
+                &refs,
+                *sel,
+                hovered,
+                SegKind {
+                    small: *small,
+                    fill: false,
+                },
+            );
+            match live {
+                Some(mk) => {
+                    for (k, rc) in rects.iter().enumerate() {
+                        env.hits.add(mk(k), *rc);
+                    }
                 }
+                None => env.hits.add(Hit::Inert, seg_r),
             }
         }
         Ctl::Slider {
@@ -512,29 +864,26 @@ fn draw_ctl(p: &mut Painter, env: &mut Env, pal: &Palette, ground: Rgb, ctl: &Ct
             reading,
             from_middle,
         } => {
-            let rw = p.measure(Face::Ui, 13.0, reading).max(40.0);
-            let tw = (r.w - rw - 10.0).clamp(40.0, 150.0);
-            let track = Rect::new(r.right() - rw - 10.0 - tw, r.y, tw, r.h);
+            let rw = reading_w(p, reading);
+            let track = Rect::new(r.x, r.y, (r.w - rw - 10.0).max(40.0), r.h);
             slider(p, pal, track, *frac, *from_middle, ground);
-            p.text_right(Face::Ui, 13.0, r.right(), r.cy(), reading, pal.text);
+            p.text_right(Face::Ui, SIZE_VALUE, r.right(), r.cy(), reading, pal.muted);
+            env.hits.add(Hit::Inert, Rect::new(r.x, r.y, r.w, r.h));
         }
-        Ctl::Dropdown(text) => {
-            let w = ctl_width(p, ctl).min(r.w);
-            dropdown(
-                p,
-                pal,
-                Rect::new(r.right() - w, r.cy() - CTL_H / 2.0, w, CTL_H),
-                text,
-            );
+        Ctl::Dropdown { text, widest } => {
+            let w = dropdown_w(p, widest).max(dropdown_w(p, text)).max(90.0);
+            let b = place(if left { r.w } else { w }, CTL_H);
+            dropdown(p, pal, b, text);
+            env.hits.add(Hit::Inert, b);
         }
         Ctl::Value { text, mono } => {
             let face = if *mono { Face::Mono } else { Face::Ui };
-            let w = p.measure(face, 13.0, text).min(r.w);
-            p.text(face, 13.0, r.right() - w, r.cy(), text, pal.text, r.w);
+            let w = p.measure(face, SIZE_VALUE, text).min(r.w);
+            let x = if left { r.x } else { r.right() - w };
+            p.text(face, SIZE_VALUE, x, r.cy(), text, pal.muted, r.w);
         }
         Ctl::Button { label, hit } => {
-            let w = button_w(p, label).min(r.w);
-            let b = Rect::new(r.right() - w, r.cy() - 14.0, w, 28.0);
+            let b = place(button_w(p, label), CTL_H);
             let (hv, pr) = (env.is_hover(*hit), env.is_pressed(*hit));
             let live_pal = env.pal;
             button(p, &live_pal, b, label, hv, pr);
@@ -555,75 +904,87 @@ fn draw_items(
     for it in items {
         match it {
             Item::Row(r) => {
-                let h = row_height(p, r, area.w);
+                let lay = layout_row(p, r, area.w);
                 let indent = if r.child { 16.0 } else { 0.0 };
-                let room = ctl_room(p, r, area.w);
-                let label_w = (area.w - room - CTL_GAP - indent).max(40.0);
                 let lx = area.x + indent;
-                let lines = if r.help.is_empty() {
-                    Vec::new()
-                } else {
-                    wrap(p, Face::Ui, HELP_SIZE, &r.help, label_w)
-                };
-                let label_cy = if lines.is_empty() {
-                    y + h / 2.0
-                } else {
-                    y + 13.0
-                };
+                let avail = area.w - indent;
                 if r.child {
                     p.fill(
-                        Rect::new(area.x + 5.0, y + 2.0, p.px().max(1.0), h - 4.0),
+                        Rect::new(area.x + 5.0, y + 2.0, p.px().max(1.0), lay.h - 4.0),
                         pal.popup_line,
                     );
                 }
-                let used = p.text(
-                    Face::Ui,
-                    LABEL_SIZE,
-                    lx,
-                    label_cy,
-                    &r.label,
-                    pal.text,
-                    label_w,
-                );
-                if let Some((t, tone)) = &r.badge {
-                    let bx = lx + used + 8.0;
-                    if bx + 30.0 < lx + label_w {
-                        badge(p, pal, bx, label_cy, t, *tone);
+                let label_cy = y + lay.label_cy;
+                if !r.label.is_empty() {
+                    let max = if lay.stacked {
+                        avail
+                    } else {
+                        avail - lay.ctl_w - CTL_GAP
+                    };
+                    let used = p.text(Face::Ui, SIZE_LABEL, lx, label_cy, &r.label, pal.text, max);
+                    if let Some((t, tone)) = &r.badge {
+                        badge(p, pal, lx + used + 8.0, label_cy, t, *tone);
                     }
                 }
-                for (i, l) in lines.iter().take(3).enumerate() {
+                for (i, l) in lay.lines.iter().enumerate() {
                     p.text(
                         Face::Ui,
-                        HELP_SIZE,
+                        SIZE_SMALL,
                         lx,
                         y + 29.0 + HELP_LINE * i as f32,
                         l,
                         pal.muted,
-                        label_w,
+                        avail,
                     );
                 }
-                let ctl_r = Rect::new(area.right() - room, y, room, h);
-                draw_ctl(p, env, pal, ground, &r.ctl, ctl_r);
-                y += h;
+                let ctl_r = if lay.stacked {
+                    Rect::new(lx, y + lay.ctl_y, avail, lay.h - lay.ctl_y - 6.0)
+                } else if r.label.is_empty() {
+                    Rect::new(lx, y, lay.ctl_w, lay.h)
+                } else {
+                    Rect::new(area.right() - lay.ctl_w, y, lay.ctl_w, lay.h)
+                };
+                draw_ctl(p, env, ground, pal, &r.ctl, ctl_r, lay.stacked);
+                y += lay.h;
             }
             Item::Sub(t) => {
-                p.text(Face::Semibold, 11.0, area.x, y + 18.0, t, pal.muted, area.w);
-                y += 28.0;
+                p.fill(
+                    Rect::new(area.x, y + 10.0, area.w, p.px().max(1.0)),
+                    pal.popup_line,
+                );
+                p.text(Face::Semibold, 11.0, area.x, y + 25.0, t, pal.muted, area.w);
+                y += SUB_H;
+            }
+            Item::Inline(parts) => {
+                let lines = inline_lines(p, parts, area.w);
+                for (n, line) in lines.iter().enumerate() {
+                    let cy = y + n as f32 * 36.0 + 14.0;
+                    let mut x = area.x;
+                    for &(i, ew) in line {
+                        let (label, ctl) = &parts[i];
+                        let lw = p.measure(Face::Ui, SIZE_VALUE, label);
+                        p.text(Face::Ui, SIZE_VALUE, x, cy, label, pal.muted, lw + 1.0);
+                        let c = Rect::new(x + lw + 8.0, cy - 14.0, ew - lw - 8.0, 28.0);
+                        draw_ctl(p, env, ground, pal, ctl, c, true);
+                        x += ew + 20.0;
+                    }
+                }
+                y += inline_height(lines.len());
             }
             Item::Note(t) => {
-                let lines = wrap(p, Face::Ui, HELP_SIZE, t, area.w);
+                let lines = wrap(p, Face::Ui, SIZE_SMALL, t, area.w);
                 for (i, l) in lines.iter().enumerate() {
                     p.text(
                         Face::Ui,
-                        HELP_SIZE,
+                        SIZE_SMALL,
                         area.x,
-                        y + 11.0 + HELP_LINE * i as f32,
+                        y + 11.0 + 15.0 * i as f32,
                         l,
                         pal.muted,
                         area.w,
                     );
                 }
-                y += HELP_LINE * lines.len() as f32 + 8.0;
+                y += 15.0 * lines.len() as f32 + 8.0;
             }
         }
     }
@@ -634,36 +995,79 @@ fn draw_items(
 fn draw_card(p: &mut Painter, env: &mut Env, card: &Card, r: Rect) {
     let pal = env.pal;
     p.frame(r, 10.0, pal.popup, pal.popup_line);
-    // Every control of a card is inert in step G2; a card that is bypassed is fainter again.
-    let dim = if card.off {
-        dimmed(&dimmed(&pal, pal.popup), pal.popup)
+    // A card that is bypassed, or whose own switch is off, has its controls drawn faint, as the mockup's `.off`.
+    let faded = card.off || card.head == Some(Some(false));
+    let dim = if faded { dimmed(&pal, pal.popup) } else { pal };
+    let px = p.px().max(1.0);
+    let rack = card.rack.is_some();
+    let bare = card.title.is_empty() && card.head.is_none() && !rack;
+    let (head_h, title_x) = if rack {
+        (RACK_HEAD, r.x + 12.0)
     } else {
-        dimmed(&pal, pal.popup)
+        (CARD_HEAD_LINE, r.x + CARD_PAD)
     };
-    let title_color = if card.off { dim.text } else { pal.text };
-    p.text(
-        Face::Semibold,
-        13.0,
-        r.x + CARD_PAD,
-        r.y + CARD_HEAD / 2.0,
-        &card.title,
-        title_color,
-        r.w - 2.0 * CARD_PAD - 52.0,
-    );
-    if let Some(on) = card.head {
-        toggle(
-            p,
-            &dim,
-            Rect::new(
-                r.right() - CARD_PAD - TOGGLE_W,
-                r.y + (CARD_HEAD - TOGGLE_H) / 2.0,
-                TOGGLE_W,
-                TOGGLE_H,
-            ),
-            on,
+    let head_cy = if rack { r.y + head_h / 2.0 } else { r.y + 27.0 };
+    if !bare {
+        p.fill(
+            Rect::new(r.x + 1.0, r.y + head_h, r.w - 2.0, px),
+            pal.popup_line,
         );
     }
-    let mut y = r.y + CARD_HEAD;
+    let right = r.right() - if rack { 12.0 } else { CARD_PAD };
+    let mut tx = right;
+    if let Some(on) = card.head {
+        tx -= TOGGLE_W;
+        let b = Rect::new(tx, head_cy - TOGGLE_H / 2.0, TOGGLE_W, TOGGLE_H);
+        toggle(p, &pal, b, on);
+        env.hits.add(Hit::Inert, b);
+        if let Some(l) = &card.head_label {
+            let w = p.measure(Face::Semibold, 11.0, l);
+            tx -= 8.0 + w;
+            p.text(Face::Semibold, 11.0, tx, head_cy, l, pal.muted, w + 1.0);
+        }
+        tx -= 8.0;
+    }
+    let title_max = (tx - title_x).max(20.0);
+    if rack {
+        p.text(
+            Face::Semibold,
+            11.0,
+            title_x,
+            head_cy,
+            &card.title.to_uppercase(),
+            pal.muted,
+            title_max,
+        );
+    } else {
+        let c = if card.off { dim.text } else { pal.text };
+        p.text(
+            Face::Semibold,
+            SIZE_CARD,
+            title_x,
+            head_cy,
+            &card.title,
+            c,
+            title_max,
+        );
+    }
+    if rack {
+        for part in &card.parts {
+            if let Part::Draw(d) = part {
+                (d.f)(
+                    p,
+                    env,
+                    Rect::new(
+                        r.x + 4.0,
+                        r.y + head_h + 8.0,
+                        r.w - 8.0,
+                        r.h - head_h - 16.0,
+                    ),
+                );
+            }
+        }
+        return;
+    }
+    let mut y = r.y + if bare { BARE_TOP } else { CARD_HEAD };
     let inner_x = r.x + CARD_PAD;
     let inner_w = r.w - 2.0 * CARD_PAD;
     for part in &card.parts {
@@ -680,24 +1084,49 @@ fn draw_card(p: &mut Painter, env: &mut Env, card: &Card, r: Rect) {
     }
 }
 
-/// Lays the cards out in a grid of columns at least [`COL_MIN`] wide that fill `area`'s width, and draws them. A
-/// card that `span`s takes a row of its own. Returns the height used.
+/// How many columns a run of `run` plain cards takes in `width`, and how wide each is: as many as fit (at least
+/// [`COL_MIN`] each) but never more than there are cards, so none is left empty.
+fn grid_cols(width: f32, run: usize) -> (usize, f32) {
+    let max_cols = (((width + GRID_GAP) / (COL_MIN + GRID_GAP)).floor() as usize).max(1);
+    let n = run.clamp(1, max_cols);
+    (n, ((width - GRID_GAP * (n - 1) as f32) / n as f32).floor())
+}
+
+/// Lays the cards out like the mockup's grid and draws them. Plain cards share the width in columns at least
+/// [`COL_MIN`] wide, and a row with fewer cards than columns stretches them to fill it. A card that `span`s takes a
+/// row of its own; mixer racks keep the width of their strips and wrap like text. Returns the height used.
 pub fn flow(p: &mut Painter, env: &mut Env, area: Rect, cards: &[Card]) -> f32 {
-    let cols = (((area.w + GRID_GAP) / (COL_MIN + GRID_GAP)).floor() as usize).max(1);
-    let col_w = ((area.w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
     let mut y = area.y;
     let mut i = 0;
     while i < cards.len() {
-        // The cards of this row: a spanning card alone, otherwise up to `cols` plain ones.
-        let mut row: Vec<(usize, f32)> = Vec::new(); // (index, width)
+        // The cards of this row, with their widths.
+        let mut row: Vec<(usize, f32)> = Vec::new();
         if cards[i].span {
             row.push((i, area.w));
             i += 1;
-        } else {
-            while i < cards.len() && !cards[i].span && row.len() < cols {
-                row.push((i, col_w));
+        } else if let Some(rack) = &cards[i].rack {
+            let mut x = 0.0;
+            while i < cards.len() {
+                let Some(rk) = &cards[i].rack else { break };
+                let w = rack_w(p, &cards[i], rk).min(area.w);
+                if !row.is_empty() && x + w > area.w {
+                    break;
+                }
+                row.push((i, w));
+                x += w + GRID_GAP;
                 i += 1;
             }
+            let _ = rack;
+        } else {
+            let mut run = 0;
+            while i + run < cards.len() && !cards[i + run].span && cards[i + run].rack.is_none() {
+                run += 1;
+            }
+            let (n, col_w) = grid_cols(area.w, run);
+            for k in 0..n {
+                row.push((i + k, col_w));
+            }
+            i += n;
         }
         let h = row
             .iter()
@@ -754,5 +1183,58 @@ mod tests {
         assert_eq!(d.popup, pal.popup);
         assert_ne!(d.text, pal.text);
         assert!(d.dark);
+    }
+
+    fn painter_parts() -> (Bitmap, Gfx) {
+        (Bitmap::new(8, 8), Gfx::new())
+    }
+
+    #[test]
+    fn a_segmented_choice_is_as_wide_as_its_text_and_room() {
+        let (mut bmp, mut gfx) = painter_parts();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let labels = ["Normal", "Full", "Night"];
+        let w = seg_width(&mut p, &labels, false).ceil();
+        let mut big = Bitmap::new(300, 40);
+        let mut p2 = Painter::new(&mut big, &mut gfx, 1.0);
+        let pal = mdshared_ui::theme::DARK;
+        let kind = SegKind {
+            small: false,
+            fill: false,
+        };
+        let r = Rect::new(2.0, 2.0, w, SEG_H);
+        let rects = draw_seg(&mut p2, &pal, r, &labels, Some(2), None, kind);
+        // The buttons tile the inside of the frame, and each is wider than its text by the room on both sides.
+        assert!((rects[0].x - (r.x + 2.0)).abs() < 0.01);
+        assert!((rects[2].right() - (r.right() - 2.0)).abs() < 0.01);
+        let night = p2.measure(Face::Semibold, SIZE_BODY, "Night");
+        assert!(rects[2].w >= night + 26.0 - 0.01, "{} {night}", rects[2].w);
+    }
+
+    #[test]
+    fn a_control_that_does_not_fit_beside_its_label_goes_under_it() {
+        let (mut bmp, mut gfx) = painter_parts();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let r = row("Speakers", seg(&["Stereo", "5.1", "7.1"], None));
+        assert!(!layout_row(&mut p, &r, 400.0).stacked);
+        let narrow = layout_row(&mut p, &r, 200.0);
+        assert!(narrow.stacked);
+        assert!(narrow.h > 34.0);
+        // A dropdown shrinks first, and only then stacks.
+        let d = row("DAC filter", dd("Slow Roll-off / Minimum Phase", &[]));
+        let beside = layout_row(&mut p, &d, 330.0);
+        assert!(!beside.stacked);
+        assert!(beside.ctl_w >= 130.0);
+        assert!(layout_row(&mut p, &d, 170.0).stacked);
+    }
+
+    #[test]
+    fn cards_fill_the_width_with_no_empty_column() {
+        // Room for three columns of 280: two cards share all of the width, three take a column each.
+        assert_eq!(grid_cols(900.0, 2), (2, 444.0));
+        assert_eq!(grid_cols(900.0, 3), (3, 292.0));
+        assert_eq!(grid_cols(900.0, 5), (3, 292.0));
+        // Narrow: one column.
+        assert_eq!(grid_cols(300.0, 4), (1, 300.0));
     }
 }

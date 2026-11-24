@@ -18,7 +18,8 @@ USAGE
   g6-gui --shot <page> <light|dark> [options]
       Render one page to a PNG without a window and without a device, from a fixed device state.
         --sample <live|busy|away>    live: the recorded G6 (default); busy: invented values; away: no G6
-        --backdrop <off|mica|acrylic> simulate the frosted chrome over a sample wallpaper
+        --backdrop <off|mica|acrylic> the frosted chrome over a sample wallpaper (default mica, the app's default)
+        --desk                       the desktop round the window, with its corners and shadow
         --dialog <appearance|device> the settings dialog over the page
         --out <file.png>             default: target/g6-gui-shots/<name>.png
         --size <WxH>                 logical px (default 1180x780)
@@ -41,6 +42,8 @@ pub struct ShotArgs {
     pub out: Option<PathBuf>,
     pub size: (u32, u32),
     pub scale: f32,
+    /// Desktop round the window, with its rounded corners and shadow, as the mockup shows it.
+    pub desk: bool,
 }
 
 impl ShotArgs {
@@ -48,12 +51,13 @@ impl ShotArgs {
         ShotArgs {
             page,
             dark,
-            backdrop: Backdrop::Off,
+            backdrop: Backdrop::Mica,
             sample: Sample::Live,
             dialog: None,
             out: None,
             size: (1180, 780),
             scale: 1.0,
+            desk: false,
         }
     }
 
@@ -64,9 +68,14 @@ impl ShotArgs {
             s += self.sample.name();
             s += "-";
         }
-        if self.backdrop != Backdrop::Off {
-            s += self.backdrop.key();
-            s += "-";
+        // Mica is the default; the others are named.
+        match self.backdrop {
+            Backdrop::Mica => {}
+            Backdrop::Off => s += "flat-",
+            Backdrop::Acrylic => s += "acrylic-",
+        }
+        if self.desk {
+            s += "desk-";
         }
         if let Some(d) = self.dialog {
             s += if d == 0 {
@@ -119,6 +128,11 @@ pub fn parse(args: &[String]) -> Result<Mode, String> {
                     _ => return Err(format!("the theme of a shot is light or dark, not {th:?}")),
                 };
                 shot = Some(ShotArgs::new(pg, dark));
+            }
+            "--desk" => {
+                shot.as_mut()
+                    .ok_or_else(|| format!("{a} goes after --shot <page> <theme>"))?
+                    .desk = true
             }
             "--shots" => shots = Some(PathBuf::from(value(&mut it, a)?)),
             "--backdrop" | "--sample" | "--dialog" | "--out" | "--size" | "--scale" => {
