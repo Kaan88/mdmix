@@ -13,8 +13,13 @@ use g6_proto::packet::{HidReport, UsbRequest, hex};
 
 /// The G6 as the CLI uses it. `out` takes the progress lines; a lighting effect passes a sink for its frames.
 pub trait Transport {
-    /// Whether the HID interface can be written to.
-    fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError>;
+    /// Whether the HID interface can be written to. Progress goes to `out`; a failed check goes to `err`, as
+    /// Python prints it on stderr.
+    fn is_hid_available_to(
+        &mut self,
+        out: &mut dyn Write,
+        err: &mut dyn Write,
+    ) -> Result<bool, CliError>;
     /// Whether the USB Audio Control interface is claimed and usable.
     fn is_audio_available(&mut self) -> bool;
     fn claim_audio(&mut self, out: &mut dyn Write) -> Result<(), CliError>;
@@ -47,9 +52,14 @@ pub struct DryRunTransport {
 
 impl DryRunTransport {
     pub fn new(debug: bool) -> Self {
+        Self::with_path(DRY_RUN_DEVICE_PATH, debug)
+    }
+
+    /// A dry run on the G6 that was found: `path` is the path as Python prints it (`b'...'`).
+    pub fn with_path(path: &str, debug: bool) -> Self {
         DryRunTransport {
             debug,
-            path: DRY_RUN_DEVICE_PATH.into(),
+            path: path.into(),
             hid_checked_at: None,
             audio_claimed: false,
         }
@@ -60,7 +70,11 @@ impl DryRunTransport {
 const AVAILABILITY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 impl Transport for DryRunTransport {
-    fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError> {
+    fn is_hid_available_to(
+        &mut self,
+        out: &mut dyn Write,
+        _err: &mut dyn Write,
+    ) -> Result<bool, CliError> {
         let due = self
             .hid_checked_at
             .is_none_or(|t| t.elapsed() > AVAILABILITY_CHECK_INTERVAL);
@@ -176,7 +190,11 @@ pub struct RecordingTransport {
 }
 
 impl Transport for RecordingTransport {
-    fn is_hid_available(&mut self, _out: &mut dyn Write) -> Result<bool, CliError> {
+    fn is_hid_available_to(
+        &mut self,
+        _out: &mut dyn Write,
+        _err: &mut dyn Write,
+    ) -> Result<bool, CliError> {
         Ok(true)
     }
 
@@ -224,8 +242,12 @@ impl FakeTransport {
 }
 
 impl Transport for FakeTransport {
-    fn is_hid_available(&mut self, out: &mut dyn Write) -> Result<bool, CliError> {
-        self.writes.is_hid_available(out)
+    fn is_hid_available_to(
+        &mut self,
+        out: &mut dyn Write,
+        err: &mut dyn Write,
+    ) -> Result<bool, CliError> {
+        self.writes.is_hid_available_to(out, err)
     }
 
     fn is_audio_available(&mut self) -> bool {

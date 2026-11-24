@@ -65,6 +65,20 @@ impl From<ProtoError> for CliError {
     }
 }
 
+/// What `main` does with how a run ended (Python's `cli_entry`): prints `error: ...` on `err` for the errors it
+/// expects, and returns the process exit code.
+pub fn finish(result: Result<(), CliError>, err: &mut dyn Write) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            if let CliError::Msg(m) = &e {
+                let _ = writeln!(err, "error: {m}");
+            }
+            e.code()
+        }
+    }
+}
+
 /// How Python prints an `OSError` about `path` for the common cases; other errors keep Rust's wording.
 pub fn os_error_text(e: &io::Error, path: &str) -> String {
     let (errno, what) = match e.kind() {

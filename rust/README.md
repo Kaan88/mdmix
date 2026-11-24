@@ -32,7 +32,7 @@ The tests need no hardware and never open a device: they run on recording and tr
   transcript. They're shared with the Python test suite. After an intended change to what the Python code sends,
   regenerate them from the repository root with `python tools/export_vectors.py` (not `--live`, which reads a real
   G6) and commit the JSON.
-- `g6-cli/tests/fixtures/python_output.json`: what the Python CLI prints (`--status` text and JSON, dry runs,
+- `g6-cli/tests/fixtures/python_output.json`: what the Python CLI prints (`--status` text and JSON, dry runs with stdout, stderr and exit code,
   profiles, option definitions, float formatting, how argparse reads awkward command lines). Regenerate it from
   the repository root with:
 
@@ -49,7 +49,7 @@ The tests need no hardware and never open a device: they run on recording and tr
 cargo run --release -- --dry-run --debug --sbx Enabled --eq-band 1k -2.5
 ```
 
-A dry run never looks for the G6. Without `--dry-run` the command writes to the device. Reading is always
+A dry run looks for the G6 (read only) but never writes to it. Without `--dry-run` the command writes to the device. Reading is always
 safe:
 
 ```sh

@@ -7,12 +7,13 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use g6_cli::args;
-use g6_cli::env::Env;
+use g6_cli::env::{Env, open_dry_run_device};
 use g6_cli::profile::{load_profile_argv, profile_file_text, profile_from_status, profile_to_argv};
 use g6_cli::pyval::{dumps_indent2, loads};
 use g6_cli::run::{main_with, parse_cli_args, without_option};
-use g6_cli::transport::{DryRunTransport, RecordingTransport, Transport};
+use g6_cli::transport::{RecordingTransport, Transport};
 use g6_cli::{CliError, Io};
+use g6_device::Lookup;
 use g6_proto::packet::{HidReport, hex, pad_report, unhex};
 use g6_proto::pyfmt::{py_g, py_repr, py_round, py_round_int, py_str_repr};
 use g6_proto::status::{DeviceStatus, collect_status};
@@ -84,8 +85,15 @@ fn status_from(ex: &Exchanges) -> DeviceStatus {
 
 enum Device {
     Recording(RecordingTransport),
-    /// The dry-run transport, without the placeholder line (the fixtures patch Python's detect_device the same way).
-    DryRun,
+    /// A dry run whose device lookup found this (a G6 that isn't there: `Lookup::NoDevice`).
+    DryRun(Lookup),
+}
+
+impl Device {
+    /// A dry run without a G6.
+    fn none() -> Self {
+        Device::DryRun(Lookup::NoDevice)
+    }
 }
 
 /// The outside world for a test run: a fixed device, a status transcript, a toggle file in a temp dir and a clock
@@ -101,13 +109,13 @@ impl Env for TestEnv {
         &mut self,
         dry_run: bool,
         debug: bool,
-        _out: &mut dyn Write,
+        out: &mut dyn Write,
     ) -> Result<Box<dyn Transport>, CliError> {
         assert!(dry_run, "tests only run dry");
-        Ok(match &self.device {
-            Device::Recording(r) => Box::new(r.clone()),
-            Device::DryRun => Box::new(DryRunTransport::new(debug)),
-        })
+        match &self.device {
+            Device::Recording(r) => Ok(Box::new(r.clone())),
+            Device::DryRun(lookup) => open_dry_run_device(Ok(lookup.clone()), debug, out),
+        }
     }
 
     fn read_status(&mut self) -> Result<DeviceStatus, CliError> {
@@ -162,6 +170,24 @@ fn run(argv: &[String], env: &mut TestEnv) -> Output {
         out: String::from_utf8(out).unwrap(),
         err: String::from_utf8(err).unwrap(),
     }
+}
+
+/// What the `g6` binary shows and returns: `g6_cli::finish` (what `main` runs) adds `error: ...` to stderr.
+fn shown(o: Output) -> (String, String, i32) {
+    let mut err = o.err.into_bytes();
+    let code = g6_cli::finish(o.result, &mut err);
+    (o.out, String::from_utf8(err).unwrap(), code)
+}
+
+fn assert_matches_python(case: &Value, o: Output, what: &str) {
+    let (out, err, code) = shown(o);
+    assert_eq!(out, case["stdout"].as_str().unwrap(), "{what} stdout");
+    assert_eq!(err, case["stderr"].as_str().unwrap(), "{what} stderr");
+    assert_eq!(
+        i64::from(code),
+        case["exit"].as_i64().unwrap(),
+        "{what} exit code"
+    );
 }
 
 fn dry(argv: &[String]) -> Vec<String> {
@@ -303,14 +329,159 @@ fn dry_run_output_matches_python() {
     for case in v["dry_run"].as_array().unwrap() {
         let argv = strings(&case["argv"]);
         let mut env = TestEnv {
-            device: Device::DryRun,
+            device: Device::none(),
             status: None,
             toggle: tmp.0.join("toggle"),
         };
         let o = run(&dry(&argv), &mut env);
-        assert!(o.result.is_ok(), "{argv:?}: {:?}", o.result);
-        assert_eq!(o.out, case["stdout"].as_str().unwrap(), "{argv:?}");
+        assert_matches_python(case, o, &format!("{argv:?}"));
     }
+}
+
+/// Every argv of writes.json with `--dry-run`: what the user sees, stdout and stderr, as Python prints it.
+#[test]
+fn writes_dry_run_output_matches_python() {
+    let v = python_output();
+    let cases = v["writes_dry_run"].as_array().unwrap();
+    assert_eq!(
+        cases.len(),
+        writes_vectors()["cases"].as_array().unwrap().len()
+    );
+    let tmp = TempDir::new("writes-dry");
+    let toggle = tmp.0.join("toggle");
+    for case in cases {
+        let argv = strings(&case["argv"]);
+        // the toggle state says Speakers was set last, as in the Python run
+        std::fs::write(&toggle, "Speakers").unwrap();
+        let mut env = TestEnv {
+            device: Device::none(),
+            status: None,
+            toggle: toggle.clone(),
+        };
+        let o = run(&dry(&argv), &mut env);
+        assert_matches_python(case, o, &format!("{argv:?}"));
+    }
+}
+
+/// The lookup a dry run does: the G6 found, missing, or without interface 4.
+#[test]
+fn dry_run_device_lookup_matches_python() {
+    let v = python_output();
+    let tmp = TempDir::new("detect");
+    let cases = v["dry_run_detect"].as_array().unwrap();
+    assert_eq!(cases.len(), 6);
+    for case in cases {
+        let argv = strings(&case["argv"]);
+        let lookup = match case["scenario"].as_str().unwrap() {
+            "found" => {
+                Lookup::Found(std::ffi::CString::new(case["g6_path"].as_str().unwrap()).unwrap())
+            }
+            "none" => Lookup::NoDevice,
+            "no_interface" => Lookup::NoInterface,
+            other => panic!("scenario {other}"),
+        };
+        let mut env = TestEnv {
+            device: Device::DryRun(lookup),
+            status: None,
+            toggle: tmp.0.join("toggle"),
+        };
+        let o = run(&dry(&argv), &mut env);
+        assert_matches_python(case, o, &format!("{} {argv:?}", case["scenario"]));
+    }
+}
+
+/// A clock that moves 1/30 s per sleep and says Ctrl+C was pressed after `interrupt_at` seconds.
+struct ClockEnv {
+    now: f64,
+    interrupt_at: f64,
+    watching: bool,
+}
+
+impl Env for ClockEnv {
+    fn open_device(
+        &mut self,
+        _dry_run: bool,
+        _debug: bool,
+        _out: &mut dyn Write,
+    ) -> Result<Box<dyn Transport>, CliError> {
+        panic!("no device here");
+    }
+    fn read_status(&mut self) -> Result<DeviceStatus, CliError> {
+        panic!("no status here");
+    }
+    fn toggle_state_path(&self) -> PathBuf {
+        panic!("no toggle here");
+    }
+    fn reload_audio_services(
+        &mut self,
+        _sudo: bool,
+        _dry_run: bool,
+        _out: &mut dyn Write,
+    ) -> Result<(), CliError> {
+        panic!("never reload audio services here");
+    }
+    fn monotonic(&mut self) -> f64 {
+        self.now
+    }
+    fn sleep(&mut self, seconds: f64) {
+        self.now += seconds;
+        // a regression that never stops the stream fails here instead of hanging the test run
+        assert!(self.now < 10.0, "the effect didn't stop on Ctrl+C");
+    }
+    fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>> {
+        None
+    }
+    fn watch_interrupt(&mut self) -> Result<(), CliError> {
+        self.watching = true;
+        Ok(())
+    }
+    fn interrupted(&mut self) -> bool {
+        self.watching && self.now >= self.interrupt_at
+    }
+}
+
+/// Ctrl+C in a lighting effect without a duration: the stream stops and the static colour is written, as Python's
+/// `KeyboardInterrupt` handler does. Runs on a recording transport and a fake clock.
+#[test]
+fn ctrl_c_stops_a_lighting_effect_and_restores_the_colour() {
+    use g6_cli::run::run_lighting_effect;
+    use g6_proto::effects::Effect;
+    use g6_proto::lighting::lighting_enable_set_rgb;
+    let rec = RecordingTransport::default();
+    let mut device = rec.clone();
+    let mut env = ClockEnv {
+        now: 0.0,
+        interrupt_at: 0.5,
+        watching: false,
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let frames = run_lighting_effect(
+        &mut device,
+        &mut env,
+        Effect::Pulsate,
+        Some([0, 255, 0]),
+        None,
+        None,
+        false,
+        true,
+        &mut Io {
+            out: &mut out,
+            err: &mut err,
+        },
+    )
+    .expect("Ctrl+C ends the run without an error");
+    assert!(env.watching);
+    assert!(
+        (14..=17).contains(&frames),
+        "{frames} frames in half a second"
+    );
+    assert!(String::from_utf8(err).unwrap().contains("Ctrl+C to stop."));
+    let log = rec.log.borrow();
+    let restore = lighting_enable_set_rgb(0, 255, 0).unwrap();
+    // every frame is the same number of reports, then the static colour
+    let streamed = log.hid.len() - restore.len();
+    assert!(frames > 0 && streamed.is_multiple_of(frames as usize));
+    assert_eq!(&log.hid[streamed..], &restore[..]);
 }
 
 #[test]
@@ -386,7 +557,7 @@ fn status_text_and_json_match_python() {
         let name = e["name"].as_str().unwrap();
         let ex = exchanges(&e["exchanges"]);
         let mut env = TestEnv {
-            device: Device::DryRun,
+            device: Device::none(),
             status: Some(ex.clone()),
             toggle: tmp.0.join("toggle"),
         };
@@ -422,7 +593,7 @@ fn profile_save_then_load() {
         let path = tmp.0.join(format!("{name}.json"));
         let path_s = path.to_string_lossy().into_owned();
         let mut env = TestEnv {
-            device: Device::DryRun,
+            device: Device::none(),
             status: Some(ex.clone()),
             toggle: tmp.0.join("toggle"),
         };
@@ -716,7 +887,7 @@ fn argv_matches_argparse() {
 fn usage_errors() {
     let tmp = TempDir::new("usage");
     let mut env = TestEnv {
-        device: Device::DryRun,
+        device: Device::none(),
         status: None,
         toggle: tmp.0.join("toggle"),
     };

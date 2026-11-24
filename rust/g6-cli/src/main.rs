@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use g6_cli::env::SystemEnv;
-use g6_cli::{CliError, Io, run};
+use g6_cli::{Io, run};
 
 /// Python's stdout and stderr are text streams: on Windows every "\n" goes out as "\r\n".
 struct TextStream<W: Write>(W);
@@ -51,14 +51,6 @@ fn main() -> ExitCode {
         },
     );
     let _ = out.flush();
-    let code = match result {
-        Ok(()) => 0,
-        Err(e) => {
-            if let CliError::Msg(m) = &e {
-                let _ = writeln!(err, "error: {m}");
-            }
-            e.code()
-        }
-    };
+    let code = g6_cli::finish(result, &mut err);
     ExitCode::from(u8::try_from(code).unwrap_or(1))
 }

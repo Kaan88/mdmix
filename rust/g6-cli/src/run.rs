@@ -229,7 +229,7 @@ pub fn device_set_audio_effects(
     env: &mut dyn Env,
     io: &mut Io,
 ) -> Result<(), CliError> {
-    if !device.is_hid_available(io.out)? {
+    if !device.is_hid_available_to(io.out, io.err)? {
         return Err(CliError::msg(
             "The G6 HID interface should be available at this point!",
         ));
@@ -271,7 +271,7 @@ pub fn device_set_audio_effects(
     applied
 }
 
-/// Python's `run_lighting_effect`: stream frames until the duration runs out, then set the static colour (red
+/// Python's `run_lighting_effect`: stream frames until the duration runs out or Ctrl+C, then set the static colour (red
 /// without one). A dry run sends one period's frames without waiting. Returns the number of frames sent.
 #[allow(clippy::too_many_arguments)] // the same parameters as the Python function
 pub fn run_lighting_effect(
@@ -321,6 +321,8 @@ pub fn run_lighting_effect(
                 effect.name()
             )?;
         }
+        // Ctrl+C ends the stream; the colour below is still restored, as Python's KeyboardInterrupt handler does
+        env.watch_interrupt()?;
         duration
     };
     // the colour has been sent already by device_set_audio_effects, so it is in range here
@@ -340,7 +342,7 @@ pub fn run_lighting_effect(
                 } else {
                     env.monotonic() - start
                 };
-                if duration.is_some_and(|d| t >= d) {
+                if duration.is_some_and(|d| t >= d) || (!dry_run && env.interrupted()) {
                     return Ok(());
                 }
                 let level = match (&mut follower, &mut meter) {
