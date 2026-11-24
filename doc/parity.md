@@ -26,17 +26,18 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Voice clarity on/off, noise reduction, AEC, smart volume | ✅ | ✅ | HID | `95 04` NR (what `--recording-voice-clarity` writes), `95 05` NR level, `95 00` AEC, `95 2c` smart volume; Voice Clarity = mode bit 0x04, no own write (SBC turns it off with the last effect) |
 | Mic EQ on/off + presets | ✅ | ✅ | HID | `95 13` switch, `95 14–1b` gains matched to `MicrophoneEqualizerPreset` (PRESET_1/2 band `17` fixed: 2 dB, was ~0) |
 | RGB light on/off | ✅ | ✅ | HID | |
-| RGB static colour | ✅ | ❌ | HID | |
-| RGB effects (solo, pulsate, cycle, music reactive) | – | – | HID | **app-side**: SBC animates them by streaming colour writes (`5a3a02/06/09`) ~20×/s; the device stores no effect. Would need a background process |
+| RGB static colour | ✅ | – | HID | SBC never reads the colour back either: its startup queries (`5a3a01…`, `5a3a02…`, `5a3a03…`) don't contain it, SBC keeps it host-side |
+| RGB effects pulsate, cycle | ✅ | – | HID | **host-side**, like SBC: `--lighting-effect {pulsate,cycle}` streams frames `5a3a020601`, `5a3a06040003010001`, `5a3a090a00030101 <brightness> <b> <g> <r>` (the byte `lighting_enable_set_rgb` fixed to `ff` is the brightness). Pulsate ramps brightness, cycle crossfades red→blue→green. Runs in the foreground; ~10 frames/s because the transport reopens the device per frame |
+| RGB effects solo, music reactive | – | – | HID | solo = static colour; music reactive needs the audio signal, not done |
 | Volume ring light (SBC: LED indicator) | ✅ | ✅ | HID | write `5a3903 00 0e <00 on / 01 off>` |
-| Playback volume L/R | ✅ | 🟡 | UAC | Windows: read through Core Audio (`g6_os_audio`), since libusb can't GET_CUR an interface the audio driver owns. Linux: ❌ (amixer would do) |
+| Playback volume L/R | ✅ | 🟡 | UAC | Windows: read through Core Audio (`g6_os_audio`), since libusb can't GET_CUR an interface the audio driver owns. Linux: `amixer -c <G6> scontents`, parser unit-tested only, the G6's ALSA control names are unconfirmed |
 | Playback mute | ✅ | 🟡 | UAC | as above |
 | Mic recording volume / mute | ✅ | 🟡 | UAC | as above (recording endpoints) |
 | Mic monitoring volume / mute | ✅ | 🟡 | UAC | as above (playback-path topology parts: Microphone = External Mic) |
 | Mixer monitoring / recording sources | ✅ | 🟡 | UAC | as above; Auxiliary = Line In; SPDIF In's level part is named "External Input Recording Mute" by the driver (unconfirmed) |
-| Speaker layout (stereo / 5.1 / 7.1) | ✅ | ❌ | UAC | ❓ may live in Windows driver settings, not on the device |
+| Speaker layout (stereo / 5.1 / 7.1) | ✅ | 🟡 | UAC | Windows: the speaker setup of the playback endpoint (`PKEY_AudioEndpoint_PhysicalSpeakers` channel mask, `0x3` = Stereo); a driver setting, not a device register. Linux: ❌ |
 | Speaker type (desktop / bookshelf) | – | – | – | app-side: no USB traffic when changed (g6-sbc-session-c) |
-| Headphone virtualization to Line Out | ✅ | ❌ | HID | `5a3903 00 0a <01/00>` (Direct-mode family); no readback found yet |
+| Headphone virtualization to Line Out | ✅ | ✅ | HID | `5a3903 00 0a <01/00>` (Direct-mode family); readback = flags byte B bit 0x04 (snapshot diff: `5a39050120400004` off, `…20440004` on) |
 | Graphic equalizer on/off, preamp, 10 bands | ✅ | ✅ | HID | `5a1207 0196 <09 / 0a / 0b–14> <float32>` + commit, confirmed in g6-sbc-session-c |
 | EQ presets | – | – | – | app-side: a preset is just 10 band values |
 | Scout Mode | ✅ | ✅ | HID | write `5a2605 07 02 00 <on>`; mode register bit 0x02 |

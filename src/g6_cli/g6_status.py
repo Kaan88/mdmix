@@ -9,7 +9,9 @@ parsers can be unit-tested against captured response bytes.
 
 Confidence of each field (as of firmware 2.1.250903.1324):
 - firmware, output, decoder_mode, dac_filter, rgb_enabled: matched against captures, reliable.
-- direct_mode, spdif_direct, ring_enabled: decoded from a shared flags response; matched with on/off captures.
+- direct_mode, spdif_direct, ring_enabled, line_out_headphone_virtualization: decoded from a shared flags
+  response; matched with on/off captures (Line Out: live on/off snapshots).
+- RGB colour: SoundBlaster Command never reads it back (it keeps the colour itself), so there is no known query.
 - sbx (per-effect switch + level), smart_volume_mode, eq_*: float32 parameters (5a110301 96 <id>), matched against
   SoundBlaster Command in two settings states (payloads/raw/g6-sbc-startup-a/-b) and live reads.
 - sbx_enabled / scout_mode / voice_clarity: mode register 5a260308ffff (payloads/raw/g6-sbc-session-c).
@@ -127,6 +129,7 @@ class DeviceStatus:
     dac_filter: Optional[str] = None  # PlaybackFilter name (same value as --playback-filter)
     direct_mode: Optional[bool] = None
     spdif_direct: Optional[bool] = None
+    line_out_headphone_virtualization: Optional[bool] = None
     rgb_enabled: Optional[bool] = None
     ring_enabled: Optional[bool] = None
     mode_flags: Optional[tuple[int, int]] = None  # raw bytes behind direct/spdif/ring, for debugging
@@ -185,6 +188,8 @@ def parse_mode_flags(r: Optional[bytes]) -> Optional[dict]:
         'direct_mode': bool(flags_a & 0x20),
         'spdif_direct': bool(flags_b & 0x20),
         'ring_enabled': not bool(flags_b & 0x40),
+        # toggled with --playback-line-out-headphone-virtualization, read with 5a390101 (2026-11-24)
+        'line_out_headphone_virtualization': bool(flags_b & 0x04),
     }
 
 
@@ -282,6 +287,7 @@ def collect_status(query: Transport) -> DeviceStatus:
         status.direct_mode = flags['direct_mode']
         status.spdif_direct = flags['spdif_direct']
         status.ring_enabled = flags['ring_enabled']
+        status.line_out_headphone_virtualization = flags['line_out_headphone_virtualization']
 
     status.decoder_mode = parse_decoder(query(Q_DECODER))
     status.dac_filter = parse_dac_filter(query(Q_DAC_FILTER))

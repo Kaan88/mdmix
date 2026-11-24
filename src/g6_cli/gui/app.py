@@ -38,6 +38,9 @@ def _on_off(value: Optional[bool]) -> str:
     return '?' if value is None else ('On' if value else 'Off')
 
 
+LAYOUT_UNKNOWN = 'Current layout: not readable here (Windows reads it from the speaker setup).'
+
+
 # ── Password dialog ───────────────────────────────────────────────────────────
 
 class PasswordDialog(ctk.CTkToplevel):
@@ -208,6 +211,9 @@ class G6GUI(ctk.CTk):
         }
         for key, value in cards.items():
             self._status_vars[key].set(value)
+        layout = (s.mixer or {}).get('speaker_layout')
+        if hasattr(self, '_layout_note'):
+            self._layout_note.set(f'Current Windows speaker setup: {layout}' if layout else LAYOUT_UNKNOWN)
 
     # ── Actions with state side effects ───────────────────────────────────────
 
@@ -541,7 +547,8 @@ class G6GUI(ctk.CTk):
             for name in ('Stereo', '5.1', '7.1'):
                 ctk.CTkButton(row, text=name, width=75, fg_color='transparent', border_width=1,
                               command=lambda o=output, n=name: self._set_layout(o, n)).pack(side='left', padx=2)
-        ctk.CTkLabel(layout, text='No readback for the layout yet — the current value is not shown.',
+        self._layout_note = ctk.StringVar(value=LAYOUT_UNKNOWN)
+        ctk.CTkLabel(layout, textvariable=self._layout_note,
                      text_color=('gray45', 'gray70'), font=ctk.CTkFont(size=11)).pack(anchor='w', padx=10,
                                                                                      pady=(2, 8))
 

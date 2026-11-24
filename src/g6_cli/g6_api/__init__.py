@@ -12,6 +12,7 @@ from g6_cli.g6_spec.decoder import decoder_mode as decoder_mode_spec
 from g6_cli.g6_spec.lighting import (
     lighting_disable as lighting_disable_spec,
     lighting_enable_set_rgb as lighting_enable_set_rgb_spec,
+    lighting_frame as lighting_frame_spec,
     lighting_volume_ring as lighting_volume_ring_spec,
 )
 from g6_cli.g6_spec.mixer import (
@@ -266,6 +267,10 @@ class G6Api:
     def lighting_enable_set_rgb(self, red: int, green: int, blue: int) -> None:
         hid_data_list = lighting_enable_set_rgb_spec(red=red, green=green, blue=blue)
         self.__device.send_hid_data_to_device(hid_data_list=hid_data_list)
+
+    def lighting_frame(self, red: int, green: int, blue: int, brightness: int = 255) -> None:
+        """One frame of a host-side lighting effect (see g6_spec.lighting_effects)."""
+        self.__device.send_hid_data_to_device(hid_data_list=lighting_frame_spec(red, green, blue, brightness))
 
     def lighting_enable_set_rgb_available(self) -> bool:
         return self.__device.is_hid_interface_available()

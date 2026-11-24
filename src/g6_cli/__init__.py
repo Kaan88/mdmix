@@ -1,8 +1,11 @@
 import argparse
+import contextlib
+import io
 import json
 import os.path
 import sys
 import tempfile
+import time
 
 from g6_cli.g6_api import G6Api
 from g6_cli.g6_spec import (
@@ -14,6 +17,12 @@ from g6_cli.g6_spec import (
 )
 from g6_cli.g6_spec.decoder import DecoderMode
 from g6_cli.g6_spec.equalizer import EQ_BAND_FREQS
+from g6_cli.g6_spec.lighting_effects import (
+    DEFAULT_PERIOD_S as LIGHTING_EFFECT_PERIOD,
+    EFFECTS as LIGHTING_EFFECTS,
+    FRAME_INTERVAL_S as LIGHTING_FRAME_INTERVAL,
+    effect_frame,
+)
 from g6_cli.g6_spec.modes import ProcessingMode
 from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
 from g6_cli.g6_status import DAC_FILTER_LABELS, DeviceStatus, read_status
@@ -54,7 +63,8 @@ def _decoder_mode_from_cli(value: str) -> DecoderMode:
 
 
 # Arguments that only modify how an action is executed; they are not an action on their own.
-_NON_ACTION_ARGS = {'dry_run', 'debug', 'json', 'reload_audio_services_no_sudo'}
+_NON_ACTION_ARGS = {'dry_run', 'debug', 'json', 'reload_audio_services_no_sudo', 'lighting_effect_period',
+                    'lighting_effect_duration'}
 
 
 def has_action(args: argparse.Namespace) -> bool:
@@ -186,6 +196,16 @@ def parse_cli_args(argv: list[str] | None = None):
     lighting_hid_group.add_argument('--lighting-volume-ring', required=False,
                                     choices=['Enabled', 'Disabled'],
                                     help='Enable or disable the volume ring light (bright LED under the volume knob).')
+    lighting_hid_group.add_argument('--lighting-effect', required=False, choices=list(LIGHTING_EFFECTS),
+                                    help='Animate the RGB light from this computer, like SoundBlaster Command does '
+                                         '(the G6 stores no effect). Runs in the foreground until Ctrl+C or '
+                                         '--lighting-effect-duration, then leaves the static colour. Pulsate uses '
+                                         'the --lighting-rgb colour (default red).')
+    lighting_hid_group.add_argument('--lighting-effect-period', required=False, type=float, metavar='SECONDS',
+                                    help='Seconds per round: pulsate dark-bright-dark (default 2), cycle once '
+                                         'around the colour wheel (default 6).')
+    lighting_hid_group.add_argument('--lighting-effect-duration', required=False, type=float, metavar='SECONDS',
+                                    help='Stop the effect after this many seconds (default: run until Ctrl+C).')
 
     #
     # Mixer [Audio]
@@ -768,6 +788,8 @@ def format_mixer_rows(mixer) -> list:
     for section, label in (('playback', 'Playback vol'), ('recording', 'Recording'), ('monitoring', 'Monitoring')):
         for i, (name, entry) in enumerate(mixer.get(section, {}).items()):
             rows.append((label if i == 0 else '', f'{name}: {level(entry)}'))
+    if mixer.get('speaker_layout'):
+        rows.append(('Speaker setup', f"{mixer['speaker_layout']} (Windows)"))
     return rows
 
 
@@ -792,6 +814,7 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
         ('DAC filter', DAC_FILTER_LABELS.get(status.dac_filter, status.dac_filter)),
         ('Direct mode', status.direct_mode),
         ('SPDIF direct', status.spdif_direct),
+        ('Line Out virt', status.line_out_headphone_virtualization),
         ('RGB light', status.rgb_enabled),
         ('Volume ring', status.ring_enabled),
     ]
@@ -852,6 +875,47 @@ def main(argv: list[str] | None = None):
 
     # process arguments and call the api
     device_set_audio_effects(api=api, args=args)
+
+    # host-side lighting effect: runs last, in the foreground
+    if args.lighting_effect is not None:
+        run_lighting_effect(api, args.lighting_effect, rgb=tuple(args.lighting_rgb or (255, 0, 0)),
+                            period=args.lighting_effect_period, duration=args.lighting_effect_duration,
+                            dry_run=args.dry_run, quiet=not args.debug)
+
+
+def run_lighting_effect(api, effect: str, rgb=(255, 0, 0), period: float | None = None,
+                        duration: float | None = None, dry_run: bool = False, quiet: bool = False,
+                        clock=time.monotonic, sleep=time.sleep) -> int:
+    """
+    Stream effect frames until ``duration`` runs out or Ctrl+C, then set the static colour again.
+    A dry run sends one period's frames without waiting. Returns the number of frames sent.
+    The transport opens the device for every frame, so about 10 frames/s get through; the animation follows the
+    clock, so only the smoothness suffers. ``quiet`` drops the transport's per-frame log lines.
+    """
+    period = period or LIGHTING_EFFECT_PERIOD[effect]
+    if period <= 0:
+        raise ValueError(f'--lighting-effect-period must be > 0, got {period}')
+    if dry_run:
+        duration = min(duration, period) if duration is not None else period
+    elif duration is None:
+        print(f'Lighting effect {effect} running, Ctrl+C to stop.', file=sys.stderr)
+    frames = 0
+    start = clock()
+    try:
+        while True:
+            t = frames * LIGHTING_FRAME_INTERVAL if dry_run else clock() - start
+            if duration is not None and t >= duration:
+                break
+            with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
+                api.lighting_frame(*effect_frame(effect, t, period, rgb))
+            frames += 1
+            if not dry_run:
+                sleep(max(0.0, start + frames * LIGHTING_FRAME_INTERVAL - clock()))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        api.lighting_enable_set_rgb(*rgb)
+    return frames
 
 
 def cli_entry() -> None:

@@ -99,14 +99,33 @@ def lighting_enable_set_rgb(red: int, green: int, blue: int) -> list[UsbHidDataF
                 additional_payload=EMPTY_ADDITIONAL_PAYLOAD
             )
         )
-        usb_hid_fragment_list.append(
-            UsbHidDataFragment(
-                mode=LIGHTING_ENABLE_RGB_MODE,
-                intermediate=LIGHTING_ENABLE_RGB_INTERMEDIATE,
-                audio_feature=LIGHTING_ENABLE_RGB_AUDIO_FEATURE,
-                value=bytes.fromhex('0101ff' + format(blue, '02x')),
-                additional_payload=bytes.fromhex(format(green, '02x') + format(red, '02x') + ''.zfill(104)),
-            )
-        )
+        usb_hid_fragment_list.append(_colour_fragment(red, green, blue, 255))
 
     return usb_hid_fragment_list
+
+
+def _check_byte(name: str, value: int) -> None:
+    if value < 0 or value > 255:
+        raise ValueError(f"{name} must be between 0 and 255, got {value}")
+
+
+def _colour_fragment(red: int, green: int, blue: int, brightness: int) -> UsbHidDataFragment:
+    # 5a3a09 0a00 03 0101 <brightness> <blue> <green> <red>
+    return UsbHidDataFragment(
+        mode=LIGHTING_ENABLE_RGB_MODE,
+        intermediate=LIGHTING_ENABLE_RGB_INTERMEDIATE,
+        audio_feature=LIGHTING_ENABLE_RGB_AUDIO_FEATURE,
+        value=bytes.fromhex('0101' + format(brightness, '02x') + format(blue, '02x')),
+        additional_payload=bytes.fromhex(format(green, '02x') + format(red, '02x') + ''.zfill(104)),
+    )
+
+
+def lighting_frame(red: int, green: int, blue: int, brightness: int = 255) -> list[UsbHidDataFragment]:
+    """
+    One animation frame, exactly as SoundBlaster Command streams it for its lighting effects
+    (5a3a020601, 5a3a06040003010001, 5a3a090a00030101 <brightness> <b> <g> <r>; g6-sbc-session-c).
+    lighting_enable_set_rgb sends the same three reports three times, with the brightness byte fixed to 0xff.
+    """
+    for name, value in (('red', red), ('green', green), ('blue', blue), ('brightness', brightness)):
+        _check_byte(name, value)
+    return lighting_enable_set_rgb(red, green, blue)[:2] + [_colour_fragment(red, green, blue, brightness)]

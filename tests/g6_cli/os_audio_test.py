@@ -50,7 +50,7 @@ def test_is_g6_endpoint(name, ok):
 
 
 def test_unsupported_platform_returns_none(monkeypatch):
-    monkeypatch.setattr(oa.sys, 'platform', 'linux')
+    monkeypatch.setattr(oa.sys, 'platform', 'darwin')
     assert oa.read_endpoint_volumes() is None and oa.read_monitoring() is None and oa.read_mixer() is None
 
 
@@ -70,3 +70,63 @@ def test_format_mixer_rows():
     assert 'Monitoring    SPDIF In: not muted' in text
     assert 'External Mic: +8.1 dB (muted)' in text
     assert format_mixer_rows(None) == []
+
+
+@pytest.mark.parametrize('mask,name', [(0x3, 'Stereo'), (0x3F, '5.1'), (0x60F, '5.1'), (0x63F, '7.1'),
+                                       (0xFF, '7.1'), (0x4, 'Mono'), (0x1234, '0x1234'), (None, None)])
+def test_speaker_layout(mask, name):
+    assert oa.speaker_layout(mask) == name
+
+
+def test_speaker_layout_row():
+    rows = format_mixer_rows({'playback': {}, 'speaker_layout': 'Stereo'})
+    assert rows == [('Speaker setup', 'Stereo (Windows)')]
+
+
+AMIXER = """\
+Simple mixer control 'PCM',0
+  Capabilities: pvolume pswitch pswitch-joined
+  Playback channels: Front Left - Front Right
+  Limits: Playback 0 - 255
+  Mono:
+  Front Left: Playback 245 [96%] [-0.61dB] [on]
+  Front Right: Playback 245 [96%] [-0.61dB] [on]
+Simple mixer control 'Line',0
+  Capabilities: pvolume pswitch cvolume cswitch
+  Front Left: Playback 0 [68%] [0.00dB] [off]
+  Front Right: Playback 0 [68%] [0.00dB] [off]
+  Front Left: Capture 10 [50%] [-3.50dB] [on]
+  Front Right: Capture 10 [50%] [-3.50dB] [on]
+Simple mixer control 'Mic',0
+  Capabilities: cvolume cswitch
+  Mono: Capture 20 [80%] [8.10dB] [off]
+Simple mixer control 'IEC958 In',0
+  Capabilities: pswitch
+  Mono: Playback [on]
+"""
+
+
+def test_parse_amixer_scontents():
+    m = oa.parse_amixer_scontents(AMIXER)
+    assert m['playback'] == {'Speakers': {'level_percent': 96, 'level_db': -0.61, 'muted': False}}
+    assert m['monitoring']['Line In'] == {'level_percent': 68, 'level_db': 0.0, 'muted': True}
+    assert m['recording']['Line In'] == {'level_percent': 50, 'level_db': -3.5, 'muted': False}
+    assert m['recording']['External Mic'] == {'level_percent': 80, 'level_db': 8.1, 'muted': True}
+    assert m['monitoring']['SPDIF In'] == {'level_percent': None, 'level_db': None, 'muted': False}
+    text = '\n'.join(f'{a:<13} {b}' for a, b in format_mixer_rows(m))
+    assert 'Playback vol  Speakers: 96% -0.6 dB' in text
+
+
+def test_find_alsa_card():
+    cards = (" 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n"
+             "                      HDA Intel PCH at 0xf7f10000 irq 32\n"
+             " 1 [G6             ]: USB-Audio - Sound BlasterX G6\n"
+             "                      Creative Technology Ltd Sound BlasterX G6 at usb-0000:00:14.0-2, high speed\n")
+    assert oa.find_alsa_card(cards) == '1'
+    assert oa.find_alsa_card(cards.splitlines()[0]) is None
+
+
+def test_linux_without_g6_card_returns_none(monkeypatch):
+    monkeypatch.setattr(oa.sys, 'platform', 'linux')
+    monkeypatch.setattr('builtins.open', lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    assert oa.read_mixer() is None

@@ -9,11 +9,18 @@ the driver:
 - the monitoring paths (sources mixed into the output) are volume/mute parts in the playback endpoint's device
   topology -> SBC Mixer "Monitoring" sliders
 
-Linux is not covered yet (amixer would be the equivalent); the readers return ``None`` there.
-Nothing in this module sets a value.
+- the Windows speaker setup (Stereo / 5.1 / 7.1, "Configure speakers") is the playback endpoint's
+  PKEY_AudioEndpoint_PhysicalSpeakers channel mask. It is a driver setting, not a device register: SBC's
+  speaker-layout control changes it, and nothing on the HID side reads it.
+
+Linux: the same mixer dict is built from ``amixer -c <G6 card> scontents``. ALSA's control names for the G6 are
+not confirmed against a real device yet, so unknown names keep the driver's name (nothing is dropped).
+Other platforms: the readers return ``None``. Nothing in this module sets a value.
 """
 from __future__ import annotations
 
+import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -79,14 +86,106 @@ def endpoints_by_flow(endpoints: list[EndpointVolume]) -> dict:
     return out
 
 
+# KSAUDIO_SPEAKER_* channel masks (ksmedia.h) -> the names Windows' "Configure speakers" dialog uses
+SPEAKER_LAYOUTS = {0x4: 'Mono', 0x3: 'Stereo', 0x33: 'Quadraphonic', 0x107: 'Surround', 0x3F: '5.1',
+                   0x60F: '5.1', 0xFF: '7.1', 0x63F: '7.1'}
+
+
+def speaker_layout(mask: Optional[int]) -> Optional[str]:
+    """Channel mask -> 'Stereo' / '5.1' / '7.1' ...; unknown masks come back as hex so they stay visible."""
+    if mask is None:
+        return None
+    return SPEAKER_LAYOUTS.get(mask, f'0x{mask:x}')
+
+
 def read_mixer() -> Optional[dict]:
     """Playback, recording and monitoring levels of the G6 as one dict, or None if not supported here."""
+    if sys.platform.startswith('linux'):
+        return read_mixer_linux()
     endpoints = read_endpoint_volumes()
     if endpoints is None:
         return None
     mixer = endpoints_by_flow(endpoints)
     mixer['monitoring'] = group_monitoring(read_monitoring() or [])
+    mixer['speaker_layout'] = speaker_layout(read_speaker_mask())
     return mixer
+
+
+def read_speaker_mask() -> Optional[int]:
+    """The Windows speaker setup of the G6 playback endpoint as a KSAUDIO channel mask, or None."""
+    if sys.platform != 'win32':
+        return None
+    return _Windows().speaker_mask()
+
+
+# --- Linux (amixer) ---------------------------------------------------------------------------------------------------
+
+# ALSA simple-control base names -> SBC Mixer labels. Guessed from the usual snd-usb-audio naming; anything else keeps
+# the driver's name.
+ALSA_PLAYBACK = {'PCM': 'Speakers', 'Speaker': 'Speakers', 'Master': 'Speakers', 'Headphone': 'Speakers'}
+ALSA_SOURCES = {'Mic': 'External Mic', 'Microphone': 'External Mic', 'External Mic': 'External Mic',
+                'Line': 'Line In', 'Line In': 'Line In', 'IEC958 In': 'SPDIF In', 'SPDIF In': 'SPDIF In'}
+
+_CONTROL_RE = re.compile(r"^Simple mixer control '(.+)',(\d+)")
+# '  Front Left: Playback 245 [96%] [-0.61dB] [on]' or '  Mono: Playback [on]', not '  Limits: Playback 0 - 255'
+_LEVEL_RE = re.compile(r'^\s+[^:]+: (Playback|Capture)(?: (-?\d+))?(?=$| \[)(?: \[(\d+)%\])?'
+                       r'(?: \[(-?[\d.]+)dB\])?(?: \[(on|off)\])?')
+
+
+def parse_amixer_scontents(text: str) -> dict:
+    """
+    ``amixer scontents`` -> {'playback': {...}, 'recording': {...}, 'monitoring': {...}}, the same shape as on Windows.
+    Playback-direction controls of input sources are the monitoring paths, capture-direction ones the recording
+    levels. The first channel's values are reported (the G6's controls are stereo-linked).
+    """
+    mixer: dict[str, dict] = {'playback': {}, 'recording': {}, 'monitoring': {}}
+    name, seen = None, set()
+    for line in text.splitlines():
+        m = _CONTROL_RE.match(line)
+        if m:
+            name, seen = m.group(1), set()
+            continue
+        m = _LEVEL_RE.match(line)
+        if not m or name is None:
+            continue
+        direction, _raw, percent, db, switch = m.groups()
+        if direction in seen:  # only the first channel
+            continue
+        seen.add(direction)
+        if direction == 'Capture':
+            section, label = 'recording', ALSA_SOURCES.get(name, name)
+        elif name in ALSA_SOURCES:
+            section, label = 'monitoring', ALSA_SOURCES[name]
+        else:
+            section, label = 'playback', ALSA_PLAYBACK.get(name, name)
+        entry = {'level_percent': int(percent) if percent is not None else None,
+                 'level_db': float(db) if db is not None else None,
+                 'muted': (switch == 'off') if switch else None}
+        mixer[section].setdefault(label, entry)
+    return mixer
+
+
+def find_alsa_card(cards_text: str) -> Optional[str]:
+    """/proc/asound/cards -> the G6's card index, or None."""
+    for line in cards_text.splitlines():
+        m = re.match(r'\s*(\d+) \[', line)
+        if m and ('G6' in line or is_g6_endpoint(line)):
+            return m.group(1)
+    return None
+
+
+def read_mixer_linux() -> Optional[dict]:
+    """The mixer dict from amixer, or None when there is no G6 card or no amixer."""
+    try:
+        with open('/proc/asound/cards', encoding='utf-8') as f:
+            card = find_alsa_card(f.read())
+        if card is None:
+            return None
+        out = subprocess.run(['amixer', '-c', card, 'scontents'], capture_output=True, text=True, timeout=5,
+                             check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_amixer_scontents(out)
 
 
 def is_g6_endpoint(name: str) -> bool:
@@ -263,6 +362,8 @@ class _Windows:
         self.enum = comtypes.CoCreateInstance(comtypes.GUID('{BCDE0395-E52F-467C-8E3D-C4579291692E}'),
                                               self.c['IMMDeviceEnumerator'], comtypes.CLSCTX_INPROC_SERVER)
         self.pkey_name = self.c['PROPERTYKEY'](comtypes.GUID('{a45c254e-df1c-4efd-8020-67d146a850e0}'), 14)
+        # PKEY_AudioEndpoint_PhysicalSpeakers
+        self.pkey_speakers = self.c['PROPERTYKEY'](comtypes.GUID('{1da5d803-d492-4edd-8c23-e0c0ffee7f0e}'), 3)
 
     def _activate(self, dev, iface):
         ptr = dev.Activate(self.ctypes.byref(iface._iid_), self.CLSCTX_ALL, None)
@@ -297,6 +398,14 @@ class _Windows:
                     is_default=dev.GetId() == default,
                 ))
         return results
+
+    def speaker_mask(self) -> Optional[int]:
+        VT_UI4 = 19
+        for _name, dev in self._g6_devices(self.E_RENDER):
+            pv = dev.OpenPropertyStore(self.STGM_READ).GetValue(self.ctypes.byref(self.pkey_speakers))
+            if pv.vt == VT_UI4:
+                return (pv.pwszVal or 0) & 0xffffffff
+        return None
 
     def _part_activate(self, part, iface):
         try:

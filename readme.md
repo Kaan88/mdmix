@@ -23,11 +23,13 @@ suite.
 | Equalizer (on/off, preamp, 10 bands) | yes | yes | HID |
 | Mic boost | yes | yes | HID |
 | Voice clarity, noise reduction, AEC, mic smart volume, mic EQ + preset | yes | yes | HID |
-| Headphone virtualization to Line Out | yes | – | HID |
-| RGB light, volume-ring light | yes | yes | HID |
+| Headphone virtualization to Line Out | yes | yes | HID |
+| RGB light on/off, volume-ring light | yes | yes | HID |
+| RGB colour | yes | – (SBC can't either) | HID |
+| RGB effects pulsate, cycle | yes, host-side (`--lighting-effect`) | – | HID |
 | Firmware version | – | yes | HID |
-| Volumes / mutes / mixer | yes | Windows (Core Audio) | USB Audio Control (needs claim on Linux) |
-| Speaker layout | yes | – | USB Audio Control |
+| Volumes / mutes / mixer | yes | Windows (Core Audio), Linux (amixer, untested on hardware) | USB Audio Control (needs claim on Linux) |
+| Speaker layout | yes | Windows (speaker setup) | USB Audio Control |
 
 **HID** commands just work. **Audio Control** commands need the kernel sound driver detached on Linux
 (`--claim-and-release`, then audio is restored). See [Linux audio commands](#linux-audio-commands).
@@ -78,6 +80,7 @@ g6 --sbx-surround Enabled --sbx-surround-value 40
 g6 --scout-mode Disabled --sbx Enabled
 g6 --eq Enabled --eq-preamp -2 --eq-band 1k 1.5 --eq-band 16k -3
 g6 --lighting-volume-ring Disabled
+g6 --lighting-effect pulsate --lighting-rgb 0 0 255   # animate from this PC until Ctrl+C (the G6 stores no effect)
 g6 --dry-run --debug --playback-filter SLOW_ROLL_OFF_LINEAR_PHASE   # print the packets, send nothing
 g6 --help                   # every option
 ```

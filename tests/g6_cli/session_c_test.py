@@ -136,3 +136,14 @@ def test_collect_status_without_answers_leaves_fields_empty():
 
 def test_playback_param_query_group():
     assert playback_param_query(0x13, RECORDING_PARAM) == bytes.fromhex('5a1103019513')
+
+
+@pytest.mark.parametrize('answer,expected', [
+    ('5a39050120400004', False),  # live snapshot, Line Out virtualization off
+    ('5a39050120440004', True),   # same, on (2026-11-24)
+])
+def test_line_out_headphone_virtualization_readback(answer, expected):
+    from g6_cli.g6_status import parse_mode_flags
+    flags = parse_mode_flags(bytes.fromhex(answer).ljust(64, b'\x00'))
+    assert flags['line_out_headphone_virtualization'] is expected
+    assert flags['direct_mode'] is True and flags['ring_enabled'] is False
