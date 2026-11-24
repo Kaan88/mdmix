@@ -1,0 +1,216 @@
+<!-- title: SoundBlaster X G6 -->
+<style>
+.win{--side:236px}
+.body{flex:1;display:flex;min-height:0}
+.side{width:236px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
+.dev{padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px}
+.dev .name{display:flex;align-items:center;gap:10px}
+.dev .name b{font-size:14px;font-weight:600;display:block}
+.dev .name .away{color:var(--warn);font-weight:600}
+.dev .dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex:none}
+.dev .lay{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.dev .vol{display:flex;align-items:center;gap:2px}
+.dev .vol .val{min-width:40px}
+.side .nav{flex:1;overflow:auto}
+.side .nav .s{display:none}
+.side .nav hr{border:0;border-top:1px solid var(--line);margin:4px 8px;flex:none}
+.side .foot{padding:10px 14px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.side .foot .dd{flex:1}
+/* the page area is the container the Signal chain measures itself against */
+main{flex:1;min-width:0;container:main/inline-size}
+.phead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.phead small{flex:1;min-width:140px}
+.phead .tags{display:flex;gap:6px}
+.phead .back{align-self:center;height:24px;padding:0 9px 0 5px;font-size:12.5px;margin-bottom:10px}
+.phead .back .ic{transform:rotate(180deg)}
+.badge.lit{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+
+/* ---- the Signal chain page: the sound's path as stages; a stage opens its page ----
+   Wide: lanes from left to right, the stages sharing the width. Narrow: each lane a column from top to bottom. */
+.lane-t{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-top:10px}
+.lane{display:flex;align-items:center;padding:28px 12px 12px 2px}
+.lane.low{padding-top:8px}
+.lane.devs{gap:12px}
+/* a stage: a card (popup, popup_line, radius 10) that is also a button */
+.stage,.bypass,.split{flex:1 1 116px;min-width:104px;max-width:150px;align-self:stretch}
+.stage{position:relative;display:flex}
+.lane.devs .stage{flex:0 1 150px}
+.node{width:100%;min-height:78px;border-radius:10px;border:1px solid var(--popup-line);background:var(--popup);padding:9px 11px;display:flex;flex-direction:column;gap:3px;text-align:left;cursor:pointer;position:relative}
+.node:hover{background:color-mix(in srgb,var(--popup) 94%,var(--text));border-color:color-mix(in srgb,var(--popup-line) 70%,var(--text))}
+.node b{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.node span{font-size:11.5px;color:var(--muted);line-height:1.3}
+.node.idle{background:transparent;border-style:dashed}
+.node.idle b{color:var(--muted)}
+.node .led{width:7px;height:7px;border-radius:50%;background:var(--faint);margin-left:auto;flex:none}
+.node.live .led{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.node.src{flex:none;width:84px;cursor:default;background:none;border-color:transparent;padding-left:2px;padding-right:2px;justify-content:center}
+.node svg.mini{width:100%;height:18px;margin-top:2px}
+.node svg.mini path{fill:none;stroke:var(--accent);stroke-width:1.5}
+/* a stage with a switch of its own: the switch sits in the stage's corner, outside the button */
+.stage.sw .node{min-height:98px;padding-bottom:32px}
+.stage.sw>.tg{position:absolute;right:10px;bottom:9px}
+.wire{flex:none;width:20px;height:2px;background:var(--accent);position:relative}
+.wire::after{content:"";position:absolute;right:0;top:-3px;border:4px solid transparent;border-left-color:var(--accent);border-right:0}
+.wire.cold{background:var(--faint)}.wire.cold::after{border-left-color:var(--faint)}
+/* Direct mode: a bypass drawn over the SBX stage */
+.bypass{position:relative;display:flex}
+.bypass .stage{flex:1;max-width:none}
+.bypass .rail{position:absolute;left:-11px;right:-11px;top:-24px;height:24px;border:2px solid var(--faint);border-bottom:0;border-radius:10px 10px 0 0;display:flex;justify-content:center}
+.bypass .rail button{position:relative;top:-13px;height:24px;border-radius:12px;border:1px solid var(--popup-line);background:var(--popup);font-size:11px;padding:0 9px;cursor:pointer;white-space:nowrap}
+.bypass.on .rail{border-color:var(--accent)}
+.bypass.on .rail button{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.split{display:flex;flex-direction:column;gap:8px}
+.split .node{min-height:0;padding:6px 11px;flex:1}
+
+@container main (max-width:730px){
+  .lane,.lane.low{flex-direction:column;align-items:stretch;padding:8px 0 4px}
+  .lane.devs{gap:8px}
+  .stage,.bypass,.split,.lane.devs .stage{flex:none;max-width:none;min-width:0}
+  .node,.node.src{width:100%;min-height:0}
+  .node.src{padding:2px 11px}
+  .stage.sw .node{min-height:0;padding:9px 64px 9px 11px}
+  .stage.sw>.tg{bottom:auto;top:50%;margin-top:-10px;right:12px}
+  .node svg.mini{display:none}
+  .wire{width:2px;height:14px;margin-left:26px}
+  .wire::after{right:auto;left:-3px;top:auto;bottom:-1px;border:4px solid transparent;border-top-color:var(--accent);border-bottom:0}
+  .wire.cold::after{border-left-color:transparent;border-top-color:var(--faint)}
+  .split{flex-direction:row}
+  /* the bypass runs down the right of the SBX stage */
+  .bypass{gap:0}
+  .bypass .stage{order:1;flex:1;min-width:0}
+  .bypass .rail{order:2;position:static;height:auto;flex:none;margin:-8px 0 -8px 6px;border:2px solid var(--faint);border-left:0;border-radius:0 10px 10px 0;align-items:center;padding:0 0 0 10px}
+  .bypass .rail button{top:0;left:11px;margin-left:-4px}
+  .bypass{padding-right:14px}
+}
+
+@media (max-width:760px){
+  .win{--side:0px}
+  .body{flex-direction:column}
+  .side{width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  /* The title bar names the device and says when it is away. Here: output and its speaker setup in one row, then the volume. */
+  .dev{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px 10px}
+  .dev .name,.dev .lay .cap11{display:none}
+  .dev .vol{grid-column:1/-1;grid-row:2}
+  .dev .lay .seg{height:28px}
+  /* The page list: every page in view, four to a row, under short names (the full name stays the accessible one). */
+  .side .nav{display:grid;grid-template-columns:repeat(4,1fr);flex:none;overflow:visible;padding:0 6px 6px}
+  .side .nav button{justify-content:center;gap:6px;padding:0 4px;font-size:12.5px;min-width:0}
+  .side .nav .l{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .side .nav .s{display:inline}
+  .side .nav hr{display:none}
+  .side .nav button[aria-current=page]::before{left:50%;top:auto;bottom:2px;width:16px;height:3px;margin:0 0 0 -8px}
+  .side .foot{display:none}
+}
+</style>
+<div class="desk"><div class="win">
+  <div class="titlebar c-title" data-c="titlebar" data-sub="firmware 2.1.250903.1324"></div>
+  <div class="body">
+    <aside class="side c-pane" aria-label="Device and pages">
+      <div class="dev">
+        <div class="name"><span class="dot"></span><div><b>SoundBlaster X G6</b><small data-show="ui.conn">USB DAC and amp</small><small class="away" data-show="!ui.conn">Not connected</small></div></div>
+        <div class="seg fill" data-k="output" data-opts="Speakers|Headphones" data-flag="set-output" data-label="Output"></div>
+        <div class="vol" data-c="master" data-lit="mute"></div>
+        <div class="lay"><span class="cap11" aria-hidden="true">Speaker setup</span><div class="seg sm" data-k="lay.cur" data-opts="Stereo|5.1|7.1" data-label="Speaker setup"></div></div>
+      </div>
+      <nav class="nav" aria-label="Pages">
+        <button data-nav="sbx"><i data-g="spark"></i><span class="l">SBX Acoustic Engine</span><span class="s" aria-hidden="true">SBX</span></button>
+        <button data-nav="eq"><i data-g="wave"></i><span class="l">Equalizer</span><span class="s" aria-hidden="true">EQ</span></button>
+        <button data-nav="playback"><i data-g="chip"></i><span class="l">Playback and decoder</span><span class="s" aria-hidden="true">Playback</span></button>
+        <button data-nav="mixer"><i data-g="mixer"></i><span class="l">Mixer</span><span class="s" aria-hidden="true">Mixer</span></button>
+        <button data-nav="mic"><i data-g="mic"></i><span class="l">Microphone</span><span class="s" aria-hidden="true">Mic</span></button>
+        <button data-nav="light"><i data-g="bulb"></i><span class="l">Lighting</span><span class="s" aria-hidden="true">Lighting</span></button>
+        <hr>
+        <button data-nav="chain"><i data-g="chain"></i><span class="l">Signal chain</span><span class="s" aria-hidden="true">Chain</span></button>
+        <button data-nav="system"><i data-g="sliders"></i><span class="l">Settings</span><span class="s" aria-hidden="true">Settings</span></button>
+      </nav>
+      <div class="foot"><span class="cap11" aria-hidden="true">Profile</span><select class="dd" data-k="profile" data-opts="Default|Gaming (headphones)|Late night" data-label="Profile"></select></div>
+    </aside>
+    <main class="page scroll pad">
+      <div class="notice conn" data-show="!ui.conn" role="alert"><i data-g="warn"></i><span><b>G6 not connected.</b> These are the last settings read from it. They can be changed again when it is back.</span><button class="btn" data-act="reconnect">Try again</button></div>
+      <div class="pg" data-page="sbx"><div class="phead"><h2 class="h2">SBX Acoustic Engine</h2><small>Surround, Crystalizer, Bass, Smart Volume and Dialog+, and Scout Mode.</small><span class="tags"><span class="badge" data-lit="sbx" data-name="SBX">SBX</span><span class="badge" data-lit="scout" data-name="Scout Mode">SCOUT</span><span class="badge" data-lit="direct" data-name="Direct mode">DIRECT</span></span></div><div data-sec="sbx"></div></div>
+      <div class="pg" data-page="eq"><div class="phead"><h2 class="h2">Equalizer</h2><small>10 bands, ±12 dB. Drag the points or the sliders.</small></div><div data-sec="eq"></div></div>
+      <div class="pg" data-page="playback"><div class="phead"><h2 class="h2">Playback and decoder</h2><small>Output, volume, speaker setup, decoder, DAC filter and Direct mode.</small></div><div data-sec="playback"></div></div>
+      <div class="pg" data-page="mixer"><div class="phead"><h2 class="h2">Mixer</h2><small>Live levels, faders and mutes for monitoring, recording and playback.</small></div><div data-sec="mixer"></div></div>
+      <div class="pg" data-page="mic"><div class="phead"><h2 class="h2">Microphone</h2><small>Mic boost, recording and monitoring volume, Voice Clarity.</small></div><div data-sec="mic"></div></div>
+      <div class="pg" data-page="light"><div class="phead"><h2 class="h2">Lighting</h2><small>RGB colour, volume ring and effects.</small></div><div data-sec="light"></div></div>
+      <div class="pg" data-page="system"><div class="phead"><h2 class="h2">Settings</h2><small>Profiles, device status and appearance.</small></div><div data-sec="system"></div></div>
+
+      <div class="pg" data-page="chain">
+        <div class="phead"><h2 class="h2">Signal chain</h2><small>The path of the sound. A stage opens its page; the switches here apply at once.</small><span class="tags"><span class="badge" data-lit="sbx" data-name="SBX">SBX</span><span class="badge" data-lit="scout" data-name="Scout Mode">SCOUT</span><span class="badge" data-lit="direct" data-name="Direct mode">DIRECT</span></span></div>
+        <h3 class="lane-t">Playback</h3>
+        <div class="lane">
+          <div class="node src"><b><i data-g="right"></i>PC audio</b><span>USB · SPDIF In</span></div>
+          <i class="wire"></i>
+          <div class="stage"><button class="node live" data-nav="playback" title="Open Playback and decoder"><b>Decoder<i class="led"></i></b><span id="n-dec"></span></button></div>
+          <i class="wire" id="w1"></i>
+          <div class="bypass" id="byp"><div class="rail"><button data-tog="direct" data-flag="playback-direct-mode" data-label="Direct mode" title="Direct mode bypasses SBX and Scout Mode">Direct mode <span data-v="direct" data-fmt="onoff"></span></button></div>
+            <div class="stage sw"><button class="node" id="nd-sbx" data-nav="sbx" title="Open SBX Acoustic Engine"><b>SBX<i class="led"></i></b><span id="n-sbx"></span></button><button class="tg" role="switch" data-k="sbx" data-flag="sbx" data-dis="direct" data-label="SBX"></button></div></div>
+          <i class="wire" id="w2"></i>
+          <div class="stage sw"><button class="node" id="nd-eq" data-nav="eq" title="Open Equalizer"><b>Equalizer<i class="led"></i></b><span id="n-eq"></span><svg class="mini" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><path id="mini"/></svg></button><button class="tg" role="switch" data-k="eq" data-flag="eq" data-label="Equalizer"></button></div>
+          <i class="wire"></i>
+          <div class="stage"><button class="node live" data-nav="playback" title="Open Playback and decoder"><b>DAC<i class="led"></i></b><span id="n-flt"></span></button></div>
+          <i class="wire"></i>
+          <div class="stage"><button class="node live" id="nd-out" data-nav="playback" title="Open Playback and decoder"><b><i data-g="speaker"></i><span data-v="output" style="font-size:13px;color:inherit"></span><i class="led"></i></b><span id="n-out"></span></button></div>
+        </div>
+        <h3 class="lane-t">Microphone and inputs</h3>
+        <div class="lane low">
+          <div class="node src"><b><i data-g="mic"></i>Mic in</b><span>External Mic</span></div>
+          <i class="wire"></i>
+          <div class="stage"><button class="node live" data-nav="mic" title="Open Microphone"><b>Mic boost<i class="led"></i></b><span>+<span data-v="mic.boost"></span> dB</span></button></div>
+          <i class="wire"></i>
+          <div class="stage sw"><button class="node" id="nd-vc" data-nav="mic" title="Open Microphone"><b>Voice Clarity<i class="led"></i></b><span id="n-vc"></span></button><button class="tg" role="switch" data-k="vc" data-flag="recording-voice-clarity" data-label="Voice Clarity"></button></div>
+          <i class="wire"></i>
+          <div class="split">
+            <button class="node" id="nd-rec" data-nav="mixer" title="Open Mixer"><b>Recording<i class="led"></i></b><span id="n-rec"></span></button>
+            <button class="node" id="nd-mon" data-nav="mixer" title="Open Mixer"><b>Monitoring<i class="led"></i></b><span id="n-mon"></span></button>
+          </div>
+          <i class="wire cold"></i>
+          <div class="stage"><button class="node live" data-nav="mixer" title="Open Mixer"><b><i data-g="mixer"></i>Mixer<i class="led"></i></b><span id="n-mix"></span></button></div>
+        </div>
+        <h3 class="lane-t">Device</h3>
+        <div class="lane low devs">
+          <div class="stage sw"><button class="node" id="nd-light" data-nav="light" title="Open Lighting"><b><i data-g="bulb"></i>Lighting<i class="led"></i></b><span id="n-light"></span></button><button class="tg" role="switch" data-k="light" data-label="Lighting"></button></div>
+          <div class="stage"><button class="node live" data-nav="system" title="Open Settings"><b><i data-g="info"></i>G6<i class="led"></i></b><span class="mono" style="font-size:10.5px" data-v="firmware"></span></button></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div></div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id), S = G6.S;
+  // A page opened from a stage gets a way back to the chain; the sidebar clears it.
+  document.querySelectorAll('.pg:not([data-page=chain]) .phead').forEach(p => p.insertAdjacentHTML('afterbegin',
+    `<button class="btn back" data-nav="chain" data-show="ui.from=chain">${G6.h.icon('right')}Signal chain</button>`));
+  // The keyboard follows: into the opened page's back button, and back onto the stage it came from.
+  let opener = null;
+  document.addEventListener('click', e => {
+    const node = e.target.closest('.node[data-nav]');
+    if (node) { S['ui.from'] = 'chain'; opener = node; setTimeout(() => document.querySelector('.pg.cur .back')?.focus(), 0); }
+    else if (e.target.closest('.back')) { S['ui.from'] = ''; setTimeout(() => (opener || document.querySelector('[data-page=chain] .node[data-nav]')).focus(), 0); }
+    else if (e.target.closest('.nav [data-nav]')) S['ui.from'] = '';
+  }, true);
+  // what each stage says about itself
+  const live = (id, on, idle) => { $(id).classList.toggle('live', !!on); $(id).classList.toggle('idle', !!idle); };
+  const names = { '#ff2a2a': 'Red', '#ff8a1f': 'Orange', '#ffd400': 'Yellow', '#3df27a': 'Green', '#22d3ee': 'Cyan', '#3b8eea': 'Blue', '#a855f7': 'Purple', '#ffffff': 'White' };
+  G6.on(S => {
+    $('n-dec').textContent = S.decoder + ' range';
+    const on = G6.FX.filter(([id]) => S['sbx.' + id]).map(f => f[1]);
+    $('n-sbx').textContent = S.direct ? 'Bypassed' : S.scout ? 'Scout Mode' : S.sbx ? (on.length ? on.join(', ') : 'No effect on') : 'Off';
+    live('nd-sbx', !S.direct && (S.sbx || S.scout), S.direct);
+    $('byp').classList.toggle('on', S.direct);
+    $('w1').classList.toggle('cold', S.direct); $('w2').classList.toggle('cold', S.direct);
+    $('n-eq').textContent = S.eq ? S['eq.preset'] : 'Off'; live('nd-eq', S.eq, !S.eq);
+    $('mini').setAttribute('d', G6.FREQS.map((_, i) => `${i ? 'L' : 'M'}${(i * 100 / 9).toFixed(1)} ${(12 - (S.eq ? S['eq.b' + i] : 0) * .9).toFixed(1)}`).join(''));
+    $('n-flt').textContent = S.filter.replace(' Roll-off / ', ', ').replace(' Phase', '');
+    $('n-out').textContent = S.mute ? 'Muted' : `Volume ${S.vol} · ${S['lay.cur']}`; live('nd-out', !S.mute);
+    const vc = ['vc.aec', 'vc.smart', 'vc.eq'].filter(k => S[k]).length;
+    $('n-vc').textContent = S.vc ? `Noise reduction ${S['vc.nr']}${vc ? `, ${vc} more` : ''}` : 'Off'; live('nd-vc', S.vc, !S.vc);
+    $('n-rec').textContent = S['mic.mute'] ? 'Muted' : 'Volume ' + S['mic.vol']; live('nd-rec', !S['mic.mute']);
+    $('n-mon').textContent = S['mon.mute'] ? 'Muted' : 'Volume ' + S['mon.vol']; live('nd-mon', !S['mon.mute']);
+    $('n-mix').textContent = G6.REC.filter(([k]) => !S[`mr.${k}.m`]).length + ' of 4 sources recorded';
+    $('n-light').textContent = S.light ? (S['light.fx'] === 'Off' ? (names[S['light.color']] || S['light.color']) : S['light.fx']) : 'Off'; live('nd-light', S.light, !S.light);
+    $('nd-light').querySelector('.led').style.background = S.light ? S['light.color'] : '';
+  });
+})();
+</script>

@@ -82,14 +82,9 @@ Crates to start with: `hidapi`, `rusb`, `clap`, `serde` / `serde_json`, `anyhow`
 
 ## GUI options
 
-The Python GUI is a tabbed form that runs the CLI (`CommandRunner`, `EffectProcess`), so the Rust GUI can work the
-same way at first by spawning the `g6` binary. Two candidates:
-
-- **`egui` / `eframe`.** Immediate mode, a single binary and little code, so it fits the slider-and-toggle layout.
-  This is the recommended default.
-- **`slint` or `tauri`.** A more native look, but more build machinery.
-
-Later, the GUI can call `g6-device` directly instead of spawning a process. The lighting effects already run as
+Decided: the GUI is built on the user's `mdshared-ui` toolkit (markdown-shared-rs), from the mockup in
+`doc/mockups/01-sbc-sidebar.html`. Every control writes at once, as SoundBlaster Command does. The plan is in
+`doc/gui-plan.md`. It calls `g6-device` directly from a worker thread instead of spawning the `g6` binary. The lighting effects already run as
 their own long-lived process in Python. In Rust they become a thread that owns the HID handle and stops cleanly,
 so the static colour no longer has to be rewritten after a kill.
 
