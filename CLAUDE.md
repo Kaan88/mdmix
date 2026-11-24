@@ -21,6 +21,8 @@ Controls a Creative SoundBlaster X G6 over USB (HID + USB Audio Control). Layout
 ## Conventions
 
 - Packet builders in `g6_spec/` stay pure (bytes in, bytes out) and get unit tests.
+- `tests/vectors/` (for the Rust port, `doc/rust-port.md`) must match the Python code: after an intended change to
+  what a command sends, run `python tools/export_vectors.py` and commit the JSON.  `--live` only reads status.
 - New readback: add the query and parser in `g6_status.py`, plus a test using the captured response bytes.
 - Every GUI control is a row in `gui/controls.py`; `tests/g6_cli/gui/controls_test.py` runs every flag through the
   real CLI parser.

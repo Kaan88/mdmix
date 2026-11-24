@@ -147,6 +147,11 @@ B_REQUEST = bytes.fromhex('01')
 
 BOTH_CHANNELS = {Channel.CHANNEL_1, Channel.CHANNEL_2}
 
+
+def in_channel_order(channels) -> list[Channel]:
+    """``channels`` left first: a set of enums iterates in a different order in every process."""
+    return sorted(channels, key=lambda c: c.value)
+
 # --- Playback ---
 
 PLAYBACK_PLAYBACK = bytes.fromhex('0001')

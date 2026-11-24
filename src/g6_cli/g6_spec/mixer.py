@@ -1,4 +1,5 @@
 from g6_cli.g6_spec import (
+    in_channel_order,
     UsbAudioData,
     get_mic_monitoring_volume_percent_bytes,
     get_mic_recording_volume_percent_bytes, Channel, B_REQUEST, PLAYBACK_PLAYBACK, MONITORING_LINE_IN,
@@ -36,7 +37,7 @@ def _unit_volume(w_index: bytes, volume_bytes: bytes, channels: set[Channel]) ->
             w_index=w_index,
             w_length=bytes.fromhex('0200'),
             data_fragment=volume_bytes,
-        ) for channel in channels
+        ) for channel in in_channel_order(channels)
     ]
 
 

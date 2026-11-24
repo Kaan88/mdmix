@@ -1,5 +1,5 @@
 from g6_cli.g6_spec import UsbAudioData, UsbHidDataFragment, get_playback_volume_percent_bytes, PlaybackFilter, Channel, \
-    BOTH_CHANNELS, B_REQUEST, PLAYBACK_PLAYBACK
+    BOTH_CHANNELS, B_REQUEST, PLAYBACK_PLAYBACK, in_channel_order
 
 PLAYBACK_INTERMEDIATE_DIRECT_MODE = bytes.fromhex('0005')
 PLAYBACK_INTERMEDIATE_SPDIF_OUT_DIRECT_MODE = bytes.fromhex('000d')
@@ -110,7 +110,7 @@ def speakers_to_stereo() -> list[UsbAudioData]:
     return [
         UsbAudioData(b_request=B_REQUEST, w_value=channel.value, w_index=PLAYBACK_PLAYBACK,
                      w_length=bytes.fromhex('0200'),
-                     data_fragment=bytes.fromhex('00f4')) for channel in BOTH_CHANNELS
+                     data_fragment=bytes.fromhex('00f4')) for channel in in_channel_order(BOTH_CHANNELS)
     ]
 
 
@@ -142,7 +142,7 @@ def headphones_to_stereo() -> list[UsbAudioData]:
     return [
         UsbAudioData(b_request=B_REQUEST, w_value=channel.value, w_index=PLAYBACK_PLAYBACK,
                      w_length=bytes.fromhex('0200'),
-                     data_fragment=bytes.fromhex('00f4')) for channel in BOTH_CHANNELS
+                     data_fragment=bytes.fromhex('00f4')) for channel in in_channel_order(BOTH_CHANNELS)
     ]
 
 
@@ -181,7 +181,7 @@ def playback_volume(volume_percent: int, channels: set[Channel]) -> list[UsbAudi
     return [
         UsbAudioData(b_request=B_REQUEST, w_value=channel.value, w_index=PLAYBACK_PLAYBACK,
                      w_length=bytes.fromhex('0200'),
-                     data_fragment=volume_percent_bytes) for channel in channels
+                     data_fragment=volume_percent_bytes) for channel in in_channel_order(channels)
     ]
 
 

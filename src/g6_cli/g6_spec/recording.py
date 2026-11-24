@@ -3,7 +3,7 @@ from enum import Enum
 from g6_cli.g6_spec import UsbAudioData, UsbHidDataFragment, get_mic_recording_volume_percent_bytes, \
     get_mic_monitoring_volume_percent_bytes, get_mic_boost_decibel_bytes, DataFragmentMode, \
     get_mic_voice_clarity_level_bytes, DataFragmentStatic, get_slider_percent_bytes, Channel, B_REQUEST, \
-    RECORDING_EXTERNAL_MIC, MONITORING_EXTERNAL_MIC, ValueRange
+    RECORDING_EXTERNAL_MIC, MONITORING_EXTERNAL_MIC, ValueRange, in_channel_order
 
 MIC_RECORDING_VOLUME_VR = ValueRange(0, 10, 100)
 MIC_BOOST_DECIBEL_VR = ValueRange(0, 10, 30)
@@ -84,7 +84,7 @@ def mic_recording_volume(volume_percent: int, channels: set[Channel]) -> list[Us
             w_index=RECORDING_EXTERNAL_MIC,
             w_length=bytes.fromhex('0200'),
             data_fragment=value,
-        ) for channel in channels
+        ) for channel in in_channel_order(channels)
     ]
 
 
@@ -146,7 +146,7 @@ def mic_monitoring_volume(volume_percent: int, channels: set[Channel]) -> list[U
             w_index=MONITORING_EXTERNAL_MIC,
             w_length=bytes.fromhex('0200'),
             data_fragment=value,
-        ) for channel in channels
+        ) for channel in in_channel_order(channels)
     ]
 
 
