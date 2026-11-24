@@ -15,6 +15,7 @@ use mdshared_ui::theme::{DARK, LIGHT};
 use crate::args::ShotArgs;
 use crate::dialog;
 use crate::frame::{FrameIn, draw_frame};
+use crate::fx::Fx;
 use crate::model::Page;
 use crate::prefs::{Prefs, Theme};
 use crate::sample::Sample;
@@ -52,10 +53,9 @@ pub fn render(args: &ShotArgs) -> Bitmap {
             hover: None,
             pointer: None,
             pressed: None,
-            toast: None,
             frosted: args.backdrop != Backdrop::Off,
         };
-        let out = draw_frame(&mut p, &input, form.as_mut());
+        let out = draw_frame(&mut p, &input, form.as_mut(), &mut Fx::still());
         areas = out
             .chrome
             .iter()

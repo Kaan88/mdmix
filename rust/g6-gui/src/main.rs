@@ -10,6 +10,7 @@ mod args;
 mod dialog;
 mod facts;
 mod frame;
+mod fx;
 mod icons;
 mod kit;
 mod model;
