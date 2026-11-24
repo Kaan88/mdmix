@@ -116,6 +116,8 @@ class DeviceStatus:
     eq_preamp_db: Optional[float] = None
     eq_bands_db: Optional[dict] = None  # band label (Hz) -> dB
     mic_boost_db: Optional[int] = None  # 0 | 10 | 20 | 30
+    # volumes/mutes via the OS audio stack (g6_os_audio.read_mixer), Windows only for now
+    mixer: Optional[dict] = None
 
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
@@ -313,7 +315,18 @@ def read_status(hid_module=None) -> DeviceStatus:
         except (IOError, OSError, ValueError):
             return None
 
-    return collect_status(query)
+    status = collect_status(query)
+    status.mixer = read_mixer_safely()
+    return status
+
+
+def read_mixer_safely() -> Optional[dict]:
+    """Volumes from the OS audio stack; None if unsupported or anything goes wrong (it is optional extra info)."""
+    try:
+        from g6_cli.g6_os_audio import read_mixer
+        return read_mixer()
+    except Exception:  # COM/driver errors must never break --status
+        return None
 
 
 def _import_hid():

@@ -707,6 +707,28 @@ def device_set_audio_effects(api: G6Api, args: argparse.Namespace):
             api.reload_alsa_and_pipewire(sudo=use_sudo)
 
 
+def format_mixer_rows(mixer) -> list:
+    """(label, text) rows for the mixer part of the status; empty when the mixer could not be read."""
+    if not mixer:
+        return []
+
+    def level(entry):
+        parts = []
+        if entry.get('level_percent') is not None:
+            parts.append(f"{entry['level_percent']}%")
+        if entry.get('level_db') is not None:
+            parts.append(f"{entry['level_db']:+.1f} dB")
+        if not parts:  # mute-only control
+            return {True: 'muted', False: 'not muted'}.get(entry.get('muted'), '?')
+        return ' '.join(parts) + (' (muted)' if entry.get('muted') else '')
+
+    rows = []
+    for section, label in (('playback', 'Playback vol'), ('recording', 'Recording'), ('monitoring', 'Monitoring')):
+        for i, (name, entry) in enumerate(mixer.get(section, {}).items()):
+            rows.append((label if i == 0 else '', f'{name}: {level(entry)}'))
+    return rows
+
+
 def format_status(status: DeviceStatus, as_json: bool) -> str:
     """
     Render a DeviceStatus for the console, either as JSON or as aligned 'key: value' lines.
@@ -746,6 +768,7 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
         bands = ' '.join(f'{freq}:{db(v)}' for freq, v in status.eq_bands_db.items())
         rows.append(('EQ (dB)', f'preamp {db(status.eq_preamp_db)} | {bands}'))
     rows.append(('Mic boost', None if status.mic_boost_db is None else f'{status.mic_boost_db} dB'))
+    rows.extend(format_mixer_rows(status.mixer))
     return '\n'.join(f'{label:<13} {fmt(value)}' for label, value in rows)
 
 

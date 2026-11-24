@@ -29,11 +29,11 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | RGB static colour | ✅ | ❌ | HID | |
 | RGB effects (breathing, cycle, …) | ❌ | ❌ | HID | ❓ capture each effect |
 | Volume ring light | ✅ | ✅ | HID | |
-| Playback volume L/R | ✅ | ❌ | UAC | feature unit 1, selector 0x02, 1/256 dB. **Readable with standard GET_CUR (0x81)**, no RE |
-| Playback mute | ✅ | ❌ | UAC | feature unit, selector 0x01: GET_CUR |
-| Mic recording volume / mute | ✅ | ❌ | UAC | GET_CUR on its feature unit |
-| Mic monitoring volume / mute | ✅ | ❌ | UAC | GET_CUR |
-| Mixer monitoring / recording sources | ✅ | ❌ | UAC | GET_CUR per source |
+| Playback volume L/R | ✅ | 🟡 | UAC | Windows: read through Core Audio (`g6_os_audio`), since libusb can't GET_CUR an interface the audio driver owns. Linux: ❌ (amixer would do) |
+| Playback mute | ✅ | 🟡 | UAC | as above |
+| Mic recording volume / mute | ✅ | 🟡 | UAC | as above (recording endpoints) |
+| Mic monitoring volume / mute | ✅ | 🟡 | UAC | as above (playback-path topology parts: Microphone = External Mic) |
+| Mixer monitoring / recording sources | ✅ | 🟡 | UAC | as above; Auxiliary = Line In; SPDIF In's level part is named "External Input Recording Mute" by the driver (unconfirmed) |
 | Speaker layout (stereo / 5.1 / 7.1) | ✅ | ❌ | UAC | ❓ may live in Windows driver settings, not on the device |
 | Graphic equalizer on/off, preamp, 10 bands | ❌ | ✅ | HID | read `96 09` / `96 0a` / `96 0b–14` (dB float32). Set: very likely `5a1207 0196 <id> <float>` like SBX; capture one band move to confirm before adding |
 | EQ presets | – | – | – | app-side: a preset is just 10 band values |
