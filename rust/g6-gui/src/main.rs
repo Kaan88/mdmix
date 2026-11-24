@@ -1,17 +1,20 @@
 //! g6-gui: the Sound BlasterX G6 control panel, drawn with the toolkit's `mdshared-ui`.
 //!
-//! Step G2 of `doc/gui-plan.md`: the window, the pages and the settings dialog, fed by a status read from the
-//! device. It reads and never writes. `--shot` renders a page to a PNG with no window and no device.
+//! Steps G2 to G4 of `doc/gui-plan.md`: the window, the pages and the settings dialog, fed by a status read from the
+//! device, and the HID settings the `g6` CLI writes, written the same way (`intent`, `desk`, `worker`). `--shot`
+//! renders a page to a PNG with no window and no device.
 
 #![forbid(unsafe_code)]
 
 mod app;
 mod args;
+mod desk;
 mod dialog;
 mod facts;
 mod frame;
 mod fx;
 mod icons;
+mod intent;
 mod kit;
 mod model;
 mod pages;

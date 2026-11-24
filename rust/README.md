@@ -10,8 +10,10 @@ phases 1 and 2 (the protocol and the command line) and the HID half of phase 3 (
   other platforms). The only crate with `unsafe`.
 - `g6-cli`: the `g6` binary. Same flags as the Python CLI. Without `--dry-run` it uses the G6 over HID; settings
   that go over USB Audio Control (volumes, mutes, speaker layout, `--claim-and-release`) stop with an error.
-- `g6-gui`: the real GUI, drawn with the user's `mdshared-ui` toolkit (step G2 of `doc/gui-plan.md`). It reads the G6 (HID and the Windows mixer) on
-  a worker thread and shows every page; it writes nothing yet. `cargo run --release -p g6-gui`, or
+- `g6-gui`: the real GUI, drawn with the user's `mdshared-ui` toolkit (steps G2 to G4 of `doc/gui-plan.md`). It reads the G6 (HID and the Windows
+  mixer) on a worker thread and shows every page. Its device controls write the HID settings the `g6` CLI writes, with the same reports, and
+  read them back; Windows' volumes and mutes, the speaker setup and the lighting effects stay read only. Not yet tried on the G6 (see
+  gui-plan, "G3/G4: Run / Not verified"). `cargo run --release -p g6-gui`, or
   `-- --shots target/g6-gui-shots` for pictures of every page without a window or a device (Mica simulated over a sample wallpaper; `--desk` adds the desktop, corners and shadow).
 - `g6-testui`: a **throwaway** egui test harness for trying the port on a real G6 by hand. Every control writes at
   once. It is not the real GUI; see `g6-testui/README.md`.

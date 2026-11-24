@@ -53,6 +53,7 @@ pub fn render(args: &ShotArgs) -> Bitmap {
             hover: None,
             pointer: None,
             pressed: None,
+            dragging: None,
             frosted: args.backdrop != Backdrop::Off,
         };
         let out = draw_frame(&mut p, &input, form.as_mut(), &mut Fx::still());

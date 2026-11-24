@@ -1,4 +1,5 @@
-//! The cards of each page, from the device state. Every device control is drawn as it is on the G6 and inert.
+//! The cards of each page, from the device state (with the values still on their way drawn over it). A control the
+//! CLI can write is bound to its setting; the rest are inert with the reason (`kit::Why`).
 //!
 //! A value the G6 did not give shows as "—", a choice with no answer has nothing chosen, and a slider with no
 //! value has its groove alone.
@@ -11,9 +12,10 @@ use mdshared_ui::glyph;
 
 use crate::facts::{self, DASH};
 use crate::icons;
+use crate::intent::{SWATCHES, Setting};
 use crate::kit::{
-    self, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, dd, dimmed, live_seg, row, seg, seg_sm,
-    value,
+    self, Bind, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, Why, dd, dimmed, live_seg, row, seg,
+    seg_sm, value,
 };
 use crate::model::{MONITORING, MixerView, Model, Page, RECORDING, Strip};
 use crate::prefs::{Prefs, Theme};
@@ -24,15 +26,20 @@ fn frac(level: Option<i64>, max: f32) -> Option<f32> {
     level.map(|v| (v as f32 / max).clamp(0.0, 1.0))
 }
 
-fn toggle_row(label: &str, on: Option<bool>) -> kit::RowSpec {
-    row(label, Ctl::Toggle(on))
+fn live(s: Setting) -> Bind {
+    Bind::Live(s)
 }
 
-fn percent_slider(level: Option<i64>) -> Ctl {
+fn toggle_row(label: &str, on: Option<bool>, bind: Bind) -> kit::RowSpec {
+    row(label, Ctl::Toggle(on, bind))
+}
+
+fn percent_slider(level: Option<i64>, bind: Bind) -> Ctl {
     Ctl::Slider {
         frac: frac(level, 100.0),
         reading: facts::percent(level),
         from_middle: false,
+        bind,
     }
 }
 
@@ -130,10 +137,10 @@ fn sbx(m: &Model) -> Vec<Card<'static>> {
         Card::new(
             "Processing mode",
             vec![
-                toggle_row("SBX", s.sbx_enabled)
+                toggle_row("SBX", s.sbx_enabled, live(Setting::Sbx))
                     .help("Master switch for the five effects below. Turns Scout Mode off.")
                     .item(),
-                toggle_row("Scout Mode", s.scout_mode)
+                toggle_row("Scout Mode", s.scout_mode, live(Setting::ScoutMode))
                     .help("Makes footsteps and quiet cues easier to hear. Turns SBX off.")
                     .item(),
             ],
@@ -142,17 +149,31 @@ fn sbx(m: &Model) -> Vec<Card<'static>> {
         .off(bypassed),
     ];
     let effects_off = bypassed || s.sbx_enabled == Some(false);
-    for (effect, name, help) in EFFECTS {
+    for (i, (effect, name, help)) in EFFECTS.into_iter().enumerate() {
         let st = s.sbx_effect(effect);
-        let mut items = vec![row("", percent_slider(st.and_then(|e| e.level))).item()];
+        let i = i as u8;
+        let mut items = vec![
+            row(
+                "",
+                percent_slider(st.and_then(|e| e.level), live(Setting::EffectLevel(i))),
+            )
+            .item(),
+        ];
         if effect == SbxEffect::SmartVolume {
             let sel = facts::index_of(&facts::SMART_MODES, s.smart_volume_mode.as_deref());
-            items.push(row("Mode", seg_sm(&facts::SMART_MODES, sel)).item());
+            items.push(
+                row(
+                    "Mode",
+                    seg_sm(&facts::SMART_MODES, sel, live(Setting::SmartMode)),
+                )
+                .help("The command line writes Loud and Night; Normal is read only.")
+                .item(),
+            );
         }
         items.push(Item::Note(help.into()));
         out.push(
             Card::new(name, items)
-                .head(st.and_then(|e| e.enabled))
+                .head(st.and_then(|e| e.enabled), live(Setting::EffectOn(i)))
                 .off(effects_off),
         );
     }
@@ -174,7 +195,12 @@ fn equalizer(m: &Model) -> Vec<Card<'static>> {
     let bands = s.eq_bands_db.unwrap_or([None; 10]);
     let pre = s.eq_preamp_db;
     let off = on == Some(false);
-    let preset_row = row("Preset", dd(preset, &[]))
+    let preset_bind = if facts::output_of(s).is_some() {
+        live(Setting::EqPreset)
+    } else {
+        Bind::Off(Why::NoOutput)
+    };
+    let preset_row = row("Preset", dd(preset, &[], preset_bind))
         .help(&format!(
             "A preset has one curve per output. This is its {which} curve."
         ))
@@ -189,7 +215,7 @@ fn equalizer(m: &Model) -> Vec<Card<'static>> {
     });
     vec![
         Card::new("Equalizer", vec![preset_row])
-            .head(on)
+            .head(on, live(Setting::Eq))
             .span()
             .then(curve_part)
             .then(bands_part),
@@ -327,15 +353,22 @@ fn eq_bands(
             &name,
             dim.muted,
         );
-        let frac = env.glide(v.map(db_frac));
-        vslider(
-            p,
-            &dim,
-            Rect::new(col.x, col.y + 18.0, col.w, col.h - 18.0 - 20.0),
-            frac,
-            true,
-            pal.popup,
-        );
+        let setting = if i == 0 {
+            Setting::EqPreamp
+        } else {
+            Setting::EqBand((i - 1) as u8)
+        };
+        let bind = live(setting);
+        let held = env.held(bind);
+        let frac = env.glide(v.map(db_frac), held);
+        let track = Rect::new(col.x, col.y + 18.0, col.w, col.h - 18.0 - 20.0);
+        vslider(p, &dim, track, frac, true, pal.popup);
+        let hit = match (env.gate(bind), frac) {
+            (Ok(s), Some(_)) => Hit::Slide(s),
+            (Ok(_), None) => Hit::Inert(Why::NotRead),
+            (Err(why), _) => Hit::Inert(why),
+        };
+        env.hits.add(hit, track);
         let text = v.map_or(DASH.to_string(), facts::db_short);
         p.text_center(
             Face::Ui,
@@ -381,6 +414,7 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
             seg(
                 &facts::LAYOUTS,
                 if out_idx == Some(i) { layout_now } else { None },
+                Bind::Off(Why::SpeakerSetup),
             ),
         );
         if out_idx == Some(i) {
@@ -402,10 +436,17 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
     };
     let filter = unreported(facts::filter_label(s));
     let mut decoder = vec![
-        row("Dynamic range", seg(&facts::DECODER_MODES, dec))
-            .help("For Dolby Digital input.")
-            .item(),
-        row("DAC filter", dd(filter, &facts::filter_labels())).item(),
+        row(
+            "Dynamic range",
+            seg(&facts::DECODER_MODES, dec, live(Setting::DecoderMode)),
+        )
+        .help("For Dolby Digital input.")
+        .item(),
+        row(
+            "DAC filter",
+            dd(filter, &facts::filter_labels(), live(Setting::DacFilter)),
+        )
+        .item(),
     ];
     if m.direct() && (s.decoder_mode.is_none() || s.dac_filter.is_none()) {
         decoder.push(Item::Note(
@@ -417,17 +458,18 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
         Card::new(
             "Output",
             vec![
-                row("Output", seg(&facts::OUTPUTS, out_idx)).help("Keeps the volume.").item(),
+                row("Output", seg(&facts::OUTPUTS, out_idx, live(Setting::Output))).help("Keeps the volume.").item(),
                 row(
                     "Volume",
                     Ctl::Slider {
                         frac: m.mixer.as_ref().and_then(|x| x.master.volume).map(|v| f32::from(v) / 100.0),
                         reading: m.mixer.as_ref().and_then(|x| x.master.volume).map_or(DASH.into(), |v| v.to_string()),
                         from_middle: false,
+                        bind: Bind::Off(Why::Windows),
                     },
                 )
                 .item(),
-                row("Mute", Ctl::Toggle(m.mixer.as_ref().and_then(|x| x.master.muted))).item(),
+                row("Mute", Ctl::Toggle(m.mixer.as_ref().and_then(|x| x.master.muted), Bind::Off(Why::Windows))).item(),
                 Item::Sub("Speaker setup".into()),
                 layout_row(0),
                 layout_row(1),
@@ -438,13 +480,13 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
         Card::new(
             "Signal path",
             vec![
-                toggle_row("Direct mode", s.direct_mode)
+                toggle_row("Direct mode", s.direct_mode, live(Setting::DirectMode))
                     .help("The shortest path to the DAC. Turns off SBX, Scout Mode and SPDIF-Out Direct.")
                     .item(),
-                toggle_row("SPDIF-Out Direct", s.spdif_direct)
+                toggle_row("SPDIF-Out Direct", s.spdif_direct, live(Setting::SpdifDirect))
                     .help("Passes the stream to the optical output untouched. Turns off Direct mode.")
                     .item(),
-                toggle_row("Headphone virtualization to Line Out", s.line_out_headphone_virtualization)
+                toggle_row("Headphone virtualization to Line Out", s.line_out_headphone_virtualization, live(Setting::LineOutVirt))
                     .help("For Line Out: the Speakers output.")
                     .item(),
             ],
@@ -478,7 +520,7 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
         let mut c = Card::new(title, Vec::new()).rack(names.clone(), wide);
         c.parts.clear();
         if let Some(h) = head {
-            c = c.head(h).head_label("Mute mix");
+            c = c.head(h, Bind::Off(Why::Windows)).head_label("Mute mix");
         }
         c.then(Part::Draw(Draw {
             h: 0.0,
@@ -493,16 +535,26 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
             "",
             vec![
                 Item::Inline(vec![
-                    ("Output".into(), seg_sm(&facts::OUTPUTS, facts::output_index(s))),
+                    (
+                        "Output".into(),
+                        seg_sm(&facts::OUTPUTS, facts::output_index(s), live(Setting::Output)),
+                    ),
                     (
                         "Speaker setup".into(),
-                        seg_sm(&facts::LAYOUTS, mx.as_ref().and_then(MixerView::layout_index)),
+                        seg_sm(
+                            &facts::LAYOUTS,
+                            mx.as_ref().and_then(MixerView::layout_index),
+                            Bind::Off(Why::SpeakerSetup),
+                        ),
                     ),
                     (
                         "Mic boost (dB)".into(),
-                        seg_sm(&facts::MIC_BOOSTS, facts::mic_boost_index(s)),
+                        seg_sm(&facts::MIC_BOOSTS, facts::mic_boost_index(s), live(Setting::MicBoost)),
                     ),
-                    ("Direct mode".into(), Ctl::Toggle(s.direct_mode)),
+                    (
+                        "Direct mode".into(),
+                        Ctl::Toggle(s.direct_mode, live(Setting::DirectMode)),
+                    ),
                 ]),
                 Item::Note(if m.mixer.is_some() {
                     "Levels and mutes are the Windows ones (Core Audio). Monitoring strips only have a level in dB, so their faders have no position.".into()
@@ -567,7 +619,7 @@ fn strips_rack(
         }
         let vol = st.and_then(|s| s.volume);
         let db = st.and_then(|s| s.db);
-        let frac = env.glide(vol.map(|v| f32::from(v) / 100.0));
+        let frac = env.glide(vol.map(|v| f32::from(v) / 100.0), false);
         vslider(
             p,
             &pal,
@@ -576,7 +628,8 @@ fn strips_rack(
             false,
             pal.popup,
         );
-        env.hits.add(Hit::Inert, Rect::new(x, fd.y, fader_w, fd.h));
+        env.hits
+            .add(Hit::Inert(Why::Windows), Rect::new(x, fd.y, fader_w, fd.h));
         let reading = match (vol, db) {
             (Some(v), _) => v.to_string(),
             (None, Some(d)) => facts::db_short(d),
@@ -603,7 +656,7 @@ fn strips_rack(
         };
         p.frame(btn, 5.0, fill, edge);
         p.text_center(Face::Semibold, 11.0, btn, "Mute", ink);
-        env.hits.add(Hit::Inert, btn);
+        env.hits.add(Hit::Inert(Why::Windows), btn);
     }
 }
 
@@ -613,6 +666,7 @@ fn strip_slider(st: Option<Strip>) -> Ctl {
         frac: v.map(|v| f32::from(v) / 100.0),
         reading: v.map_or(DASH.into(), |v| v.to_string()),
         from_middle: false,
+        bind: Bind::Off(Why::Windows),
     }
 }
 
@@ -622,6 +676,7 @@ fn db_slider(st: Option<Strip>) -> Ctl {
         frac: None,
         reading: st.and_then(|s| s.db).map_or(DASH.into(), facts::db),
         from_middle: false,
+        bind: Bind::Off(Why::Windows),
     }
 }
 
@@ -639,6 +694,7 @@ fn microphone(m: &Model) -> Vec<Card<'static>> {
         dd(
             facts::mic_eq_label(s).unwrap_or_else(|| DASH.into()),
             &facts::MIC_EQ_LABELS,
+            live(Setting::MicEqPreset),
         ),
     )
     .child();
@@ -649,11 +705,11 @@ fn microphone(m: &Model) -> Vec<Card<'static>> {
         Card::new(
             "Microphone",
             vec![
-                row("Mic boost (dB)", seg(&facts::MIC_BOOSTS, facts::mic_boost_index(s))).item(),
+                row("Mic boost (dB)", seg(&facts::MIC_BOOSTS, facts::mic_boost_index(s), live(Setting::MicBoost))).item(),
                 row("Recording volume", strip_slider(rec_mic)).item(),
-                toggle_row("Mute recording", rec_mic.and_then(|s| s.muted)).item(),
+                toggle_row("Mute recording", rec_mic.and_then(|s| s.muted), Bind::Off(Why::Windows)).item(),
                 row("Monitoring volume", db_slider(mon_mic)).item(),
-                toggle_row("Mute monitoring", mon_mic.and_then(|s| s.muted)).item(),
+                toggle_row("Mute monitoring", mon_mic.and_then(|s| s.muted), Bind::Off(Why::Windows)).item(),
                 Item::Note("Monitoring plays the microphone back on the output. Volumes and mutes are Windows' (the External Mic); they show — when Windows gave none, and the monitoring level is in dB.".into()),
             ],
         ),
@@ -666,16 +722,17 @@ fn microphone(m: &Model) -> Vec<Card<'static>> {
                         frac: frac(rec.noise_reduction_level, 100.0),
                         reading: facts::percent(rec.noise_reduction_level),
                         from_middle: false,
+                        bind: live(Setting::NoiseReduction),
                     },
                 )
                 .item(),
-                toggle_row("Acoustic echo cancellation", rec.acoustic_echo_cancellation).item(),
-                toggle_row("Smart Volume", rec.smart_volume).item(),
-                toggle_row("Mic EQ", mic_eq).item(),
+                toggle_row("Acoustic echo cancellation", rec.acoustic_echo_cancellation, live(Setting::Aec)).item(),
+                toggle_row("Smart Volume", rec.smart_volume, live(Setting::MicSmartVolume)).item(),
+                toggle_row("Mic EQ", mic_eq, live(Setting::MicEq)).item(),
                 preset_row.item(),
             ],
         )
-        .head(s.voice_clarity)
+        .head(s.voice_clarity, live(Setting::VoiceClarity))
         .off(vc_off),
     ]
 }
@@ -686,32 +743,45 @@ fn lighting(m: &Model) -> Vec<Card<'static>> {
     let s = &m.status;
     let on = s.rgb_enabled;
     let ring_on = s.ring_enabled;
+    let colour = m.colour;
+    let colour_name = colour
+        .and_then(|c| SWATCHES.iter().find(|(_, rgb)| *rgb == c))
+        .map_or(DASH, |(n, _)| *n);
+    let names: Vec<&str> = SWATCHES.iter().map(|(n, _)| *n).collect();
+    // Turning the light on sends a colour; with none set from here, there is none to send.
+    let head_bind = if on != Some(true) && colour.is_none() {
+        Bind::Off(Why::NoColour)
+    } else {
+        live(Setting::Lighting)
+    };
     vec![
         Card::new(
             "Lighting",
             vec![
-                row("Colour", value(DASH)).help("The G6 can't be asked which colour it shows.").item(),
-                toggle_row("Volume ring light", ring_on).help("The LED indicator round the knob.").item(),
+                row("Colour", dd(colour_name, &names, live(Setting::Colour)))
+                    .help("Turns the light on in this colour. The G6 can't be asked which colour it shows, so this is the one set from here.")
+                    .item(),
+                toggle_row("Volume ring light", ring_on, live(Setting::VolumeRing)).help("The LED indicator round the knob.").item(),
             ],
         )
-        .head(on)
+        .head(on, head_bind)
         .then(Part::Draw(Draw {
             h: 112.0,
-            f: Box::new(move |p, env, r| light_ring(p, env, r, on)),
+            f: Box::new(move |p, env, r| light_ring(p, env, r, on, colour)),
         })),
         Card::new(
             "Effects",
             vec![
-                row("Effect", seg(&["Off", "Pulsate", "Cycle", "Music"], None)).item(),
+                row("Effect", seg(&["Off", "Pulsate", "Cycle", "Music"], None, Bind::Off(Why::Effects))).item(),
                 row("Period", value(DASH)).help("Seconds for one pulse or colour turn. Needs an effect.").item(),
-                toggle_row("Music: cycle colours", None).help("Needs the Music effect.").item(),
+                toggle_row("Music: cycle colours", None, Bind::Off(Why::Effects)).help("Needs the Music effect.").item(),
                 Item::Note("Host-side effects: they run while this app is open, so there is nothing to read back. Music follows the playback level (Windows).".into()),
             ],
         ),
     ]
 }
 
-fn light_ring(p: &mut Painter, env: &mut Env, r: Rect, on: Option<bool>) {
+fn light_ring(p: &mut Painter, env: &mut Env, r: Rect, on: Option<bool>, colour: Option<[u8; 3]>) {
     let pal = env.pal;
     let dim = pal;
     let c = (r.x + 56.0, r.cy());
@@ -726,8 +796,9 @@ fn light_ring(p: &mut Painter, env: &mut Env, r: Rect, on: Option<bool>) {
         [0x18, 0x18, 0x1a],
     );
     p.rbox(Rect::new(c.0 - 40.0, c.1 - 40.0, 80.0, 80.0), 40.0, disc);
-    let ring = match on {
-        Some(true) => mix(pal.text, pal.popup, 0.2),
+    let ring = match (on, colour) {
+        (Some(true), Some(c)) => c,
+        (Some(true), None) => mix(pal.text, pal.popup, 0.2),
         _ => [0x3a, 0x3a, 0x40],
     };
     p.rbox(Rect::new(c.0 - 35.0, c.1 - 35.0, 70.0, 70.0), 35.0, ring);
@@ -736,10 +807,11 @@ fn light_ring(p: &mut Painter, env: &mut Env, r: Rect, on: Option<bool>) {
         30.0,
         [0x18, 0x18, 0x1a],
     );
-    let text = match on {
-        Some(true) => "Lit. The G6 can't be asked which colour it shows.",
-        Some(false) => "Off.",
-        None => "State not read.",
+    let text = match (on, colour) {
+        (Some(true), Some(_)) => "Lit in the colour set from here.",
+        (Some(true), None) => "Lit. The G6 can't be asked which colour it shows.",
+        (Some(false), _) => "Off.",
+        (None, _) => "State not read.",
     };
     let lines = kit::wrap(p, Face::Ui, 12.0, text, r.w - 120.0);
     for (i, line) in lines.iter().enumerate() {

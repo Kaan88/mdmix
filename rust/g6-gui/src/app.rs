@@ -5,7 +5,9 @@
 //! timer included, through `wake_at`) is what the loop waits for, and with nothing moving it waits for an event, as
 //! before. See `doc/gui-plan.md`, "Motion".
 //!
-//! Reading only. The one thing this window sends to the G6 is what the worker's status read sends.
+//! Writes: a click on a bound control, a slider's drag (taken by the pointer until release) or a dropdown's choice is
+//! an intent for `desk::Desk`, which hands the worker the CLI's write for it and reconciles the read-back. Ctrl+Z
+//! undoes the last single setting.
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -16,10 +18,12 @@ use mdshared_ui::anim::{Clock, SystemClock};
 use mdshared_ui::frost::{self, Frost};
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
 use mdshared_ui::keys::{self, Mods};
+use mdshared_ui::menu::{Item as MenuItem, Menu};
 use mdshared_ui::platform;
 use mdshared_ui::scroll::SmoothScroll;
 use mdshared_ui::settings::pages::Form;
 use mdshared_ui::settings::{Outcome, Value};
+use mdshared_ui::slider::Slider;
 use mdshared_ui::window;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
@@ -31,13 +35,44 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::corners::Corners;
 
+use crate::desk::{Desk, Phase};
 use crate::dialog;
 use crate::frame::{FrameIn, FrameOut, draw_frame};
 use crate::fx::Fx;
+use crate::intent::{Setting, Val};
 use crate::kit::{Hit, Hits};
 use crate::model::{Conn, Model, Page};
 use crate::prefs::{self, Prefs, Theme};
 use crate::worker::{Cmd, ReadResult, Worker};
+
+/// The slider in hand: its setting, the rectangle its thumb travels in, and the toolkit's slider doing the arithmetic.
+struct Capture {
+    setting: Setting,
+    track: Rect,
+    slider: Slider,
+}
+
+/// The rectangle the toolkit's slider is given for a slider the kit drew in `r`: the kit's knob travels 7 px in from
+/// the ends, the toolkit's half its 18 px thumb, so the toolkit's rectangle is 2 px longer at each end.
+fn travel_rect(s: Setting, r: Rect) -> Rect {
+    if vertical(s) {
+        Rect::new(r.x, r.y - 2.0, r.w, r.h + 4.0)
+    } else {
+        Rect::new(r.x - 2.0, r.y, r.w + 4.0, r.h)
+    }
+}
+
+/// The EQ's preamp and bands stand upright.
+fn vertical(s: Setting) -> bool {
+    matches!(s, Setting::EqPreamp | Setting::EqBand(_))
+}
+
+/// The toolkit's slider for a setting at the value shown.
+fn slider_for(s: Setting, shown: Val) -> Option<Slider> {
+    let (lo, hi, step) = s.range()?;
+    let sl = Slider::new(lo, hi, s.unit_of(shown)).step(step);
+    Some(if vertical(s) { sl.vertical() } else { sl })
+}
 
 /// What wakes the loop from another thread.
 pub enum UserEvent {
@@ -100,7 +135,11 @@ struct App {
     mods: Mods,
     last_click: Option<(Instant, (f32, f32), u8)>,
     dialog: Option<Form>,
-    /// Motion: the animator and what is kept while it leaves (the toast's text, the closed dialog).
+    /// The write path: what was asked for and not read back yet, the drag's throttle, Undo.
+    desk: Desk,
+    /// The slider in hand, which has the pointer until it is let go.
+    capture: Option<Capture>,
+    /// Motion: the animator and what is kept while it leaves (the toast's text, the closed dialog, an open dropdown).
     fx: Fx,
     clock: SystemClock,
     /// When the toast goes away; its fade-out follows.
@@ -136,6 +175,8 @@ impl App {
             mods: Mods::default(),
             last_click: None,
             dialog: None,
+            desk: Desk::default(),
+            capture: None,
             fx: Fx::new(),
             clock: SystemClock,
             toast_until: None,
@@ -183,13 +224,84 @@ impl App {
     }
 
     fn read_done(&mut self, r: ReadResult) {
-        let why = r.status.as_ref().err().cloned();
-        self.model.apply(r.status, r.mixer);
-        self.sync_dialog();
-        // The result says what it answers: a read the user asked for, merged or not.
-        if r.user {
-            self.say(why.unwrap_or_else(|| "Status read from the G6.".into()));
+        // The writes of the turn are settled against its read; a read the user asked for says how it went.
+        if let Some(t) = self.desk.reconcile(&mut self.model, r) {
+            self.say(t);
         }
+        if matches!(self.model.conn, Conn::Away(_)) {
+            self.capture = None;
+        }
+        self.sync_dialog();
+        self.redraw();
+    }
+
+    /// A user action on a device control: the desk decides what goes to the worker.
+    fn intent(&mut self, s: Setting, v: Val, phase: Phase) {
+        match self.desk.intent(&self.model, s, v, phase, Instant::now()) {
+            Ok(Some(cmd)) => self.send(cmd),
+            Ok(None) => {}
+            Err(t) => self.say(t),
+        }
+        self.redraw();
+    }
+
+    fn send(&mut self, cmd: Cmd) {
+        if !self.worker.ask(cmd) {
+            self.model.conn = Conn::Away("The device worker is not running.".into());
+            self.desk.pending.clear();
+        }
+    }
+
+    /// Ctrl+Z: the last single setting back to what it was, as a new write.
+    fn undo(&mut self) {
+        match self.desk.undo(&self.model, Instant::now()) {
+            Ok(Some(cmd)) => self.send(cmd),
+            Ok(None) => {}
+            Err(t) => self.say(t),
+        }
+        self.redraw();
+    }
+
+    /// Takes hold of a slider at the press; the value jumps to the point unless the thumb was taken.
+    fn grab(&mut self, s: Setting, r: Rect, x: f32, y: f32) {
+        let shown = self.desk.shown(&self.model);
+        let Some(mut slider) = s.current(&shown).and_then(|v| slider_for(s, v)) else {
+            return;
+        };
+        let track = travel_rect(s, r);
+        if !slider.press(track, x, y) {
+            return;
+        }
+        let v = s.val_of(slider.value());
+        self.capture = Some(Capture {
+            setting: s,
+            track,
+            slider,
+        });
+        self.intent(s, v, Phase::Drag);
+    }
+
+    /// Lets go of the slider in hand: its last value is sent.
+    fn let_go(&mut self) {
+        if let Some(mut c) = self.capture.take() {
+            c.slider.release();
+            let v = c.setting.val_of(c.slider.value());
+            self.intent(c.setting, v, Phase::Release);
+        }
+    }
+
+    /// Opens a dropdown's choices under it, the one the G6 has ticked.
+    fn open_menu(&mut self, s: Setting) {
+        let Some(r) = self.hits.rect_of(Hit::Open(s)) else {
+            return;
+        };
+        let now = s.current(&self.desk.shown(&self.model));
+        let items: Vec<MenuItem<Hit>> = s
+            .options()
+            .into_iter()
+            .map(|(label, v)| MenuItem::new(Hit::Set(s, v), label).checked(now == Some(v)))
+            .collect();
+        self.fx.menu = Some(Menu::new(items, r.x, r.bottom() + 2.0, false));
         self.redraw();
     }
 
@@ -269,8 +381,10 @@ impl App {
         } else {
             self.pointer.and_then(|(x, y)| self.hits.at(x, y))
         };
+        // The pending values are drawn over the device's until their read-back comes.
+        let shown = self.desk.shown(&self.model);
         let input = FrameIn {
-            model: &self.model,
+            model: &shown,
             prefs: &self.prefs,
             pal,
             page: self.page,
@@ -284,6 +398,7 @@ impl App {
                 self.pointer
             },
             pressed: self.pressed,
+            dragging: self.capture.as_ref().map(|c| c.setting),
             frosted: self.frost.key().is_some(),
         };
         let mut p = Painter::new(&mut self.bmp, &mut self.gfx, self.scale);
@@ -360,6 +475,20 @@ impl App {
         let before = self.pointer.and_then(|(x, y)| self.hits.at_rect(x, y));
         self.pointer = Some((x, y));
         let mut changed = false;
+        if let Some(c) = &mut self.capture {
+            if c.slider.drag(c.track, x, y) {
+                let (s, v) = (c.setting, c.setting.val_of(c.slider.value()));
+                self.intent(s, v, Phase::Drag);
+            }
+            return;
+        }
+        if let Some(m) = &mut self.fx.menu {
+            if m.pointer(x, y) {
+                self.redraw();
+            }
+            self.update_cursor(x, y);
+            return;
+        }
         if let Some(f) = &mut self.dialog {
             changed |= f.pointer_move(x, y);
         } else {
@@ -383,7 +512,10 @@ impl App {
                 Some(ResizeDirection::NorthEast | ResizeDirection::SouthWest) => {
                     CursorIcon::NeswResize
                 }
-                None if self.dialog.is_none() && self.hits.at(x, y) == Some(Hit::Inert) => {
+                None if self.dialog.is_none()
+                    && self.fx.menu.is_none()
+                    && matches!(self.hits.at(x, y), Some(Hit::Inert(_))) =>
+                {
                     CursorIcon::NotAllowed
                 }
                 None => CursorIcon::Default,
@@ -415,8 +547,20 @@ impl App {
             self.dialog_outcome(event_loop, out);
             return;
         }
+        // An open dropdown takes the click: on it, the choice is made on release; beside it, it closes.
+        if let Some(m) = &self.fx.menu {
+            if !m.contains(x, y) {
+                self.fx.menu = None;
+                self.redraw();
+            }
+            return;
+        }
         if let (Some(dir), Some(w)) = (self.edge(x, y), &self.window) {
             let _ = w.drag_resize_window(dir);
+            return;
+        }
+        if let Some((Hit::Slide(s), r)) = self.hits.at_rect(x, y) {
+            self.grab(s, r, x, y);
             return;
         }
         match self.hits.at(x, y) {
@@ -438,6 +582,24 @@ impl App {
     }
 
     fn released_at(&mut self, event_loop: &ActiveEventLoop, x: f32, y: f32) {
+        if self.capture.is_some() {
+            self.let_go();
+            return;
+        }
+        if let Some(m) = &mut self.fx.menu {
+            if m.contains(x, y) {
+                m.pointer(x, y);
+                let chosen = m.chosen();
+                if chosen.is_some() {
+                    self.fx.menu = None;
+                }
+                if let Some(hit) = chosen {
+                    self.activate(event_loop, hit);
+                }
+                self.redraw();
+            }
+            return;
+        }
         if let Some(f) = &mut self.dialog {
             let out = f.release(x, y);
             self.dialog_outcome(event_loop, out);
@@ -475,7 +637,10 @@ impl App {
             Hit::Theme(i) => self.apply_setting(dialog::THEME, &Value::Choice(i)),
             Hit::Backdrop(i) => self.apply_setting(dialog::BACKDROP, &Value::Choice(i)),
             Hit::Corners(i) => self.apply_setting(dialog::CORNERS, &Value::Choice(i)),
-            Hit::Drag | Hit::Inert => {}
+            Hit::Set(s, v) => self.intent(s, v, Phase::Click),
+            Hit::Open(s) => self.open_menu(s),
+            // A slider is taken on the press (`grab`), not on a click.
+            Hit::Slide(_) | Hit::Drag | Hit::Inert(_) => {}
         }
         self.redraw();
     }
@@ -483,6 +648,7 @@ impl App {
     fn open_dialog(&mut self, page: usize) {
         self.dialog = Some(dialog::form_at(&self.prefs, &self.model, page));
         self.pressed = None;
+        self.fx.menu = None;
     }
 
     fn dialog_outcome(&mut self, event_loop: &ActiveEventLoop, out: Outcome) {
@@ -554,7 +720,25 @@ impl App {
             return;
         }
         use keys::KeyName as K;
+        if let Some(m) = &mut self.fx.menu {
+            match name {
+                Some(K::Escape) => self.fx.menu = None,
+                Some(K::Down) => m.step(true),
+                Some(K::Up) => m.step(false),
+                Some(K::Enter) => {
+                    let chosen = m.chosen();
+                    self.fx.menu = None;
+                    if let Some(hit) = chosen {
+                        self.activate(event_loop, hit);
+                    }
+                }
+                _ => {}
+            }
+            self.redraw();
+            return;
+        }
         match (name, self.mods.ctrl) {
+            (Some(K::Char('z')), true) => self.undo(),
             (Some(K::F(5)), _) | (Some(K::Char('r')), true) => self.ask_read(true),
             (Some(K::Char(',')), true) => self.open_dialog(0),
             (Some(K::Down), _) => self.scroll_by(-WHEEL_LINE / 2.0),
@@ -678,6 +862,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Focused(f) => {
                 self.focused = f;
+                // A slider held while the window loses the focus is let go there.
+                if !f {
+                    self.let_go();
+                }
                 if f {
                     self.sync_motion();
                 }
@@ -711,12 +899,22 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseScrollDelta::LineDelta(_, y) => y * WHEEL_LINE,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.scale,
                 };
+                let (x, y) = self.pointer.unwrap_or((0.0, 0.0));
                 if let Some(f) = &mut self.dialog {
-                    let (x, y) = self.pointer.unwrap_or((0.0, 0.0));
                     if f.wheel(x, y, dy) {
                         self.redraw();
                     }
-                } else {
+                } else if let Some(m) = &mut self.fx.menu {
+                    // Over its list the wheel scrolls it; elsewhere the page moves and the list closes.
+                    if m.contains(x, y) {
+                        if m.scroll_by(-dy) {
+                            self.redraw();
+                        }
+                    } else {
+                        self.fx.menu = None;
+                        self.scroll_by(dy);
+                    }
+                } else if self.capture.is_none() {
                     self.scroll_by(dy);
                 }
             }
@@ -733,6 +931,11 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A dragged slider's value that waited out the throttle goes now.
+        if let Some(cmd) = self.desk.tick(&self.model, Instant::now()) {
+            self.send(cmd);
+            self.redraw();
+        }
         // The toast's time is up: let it go, and its exit plays from the next frame.
         if let Some(until) = self.toast_until
             && Instant::now() >= until
@@ -742,9 +945,65 @@ impl ApplicationHandler<UserEvent> for App {
             self.redraw();
         }
         // Something moving or a timer: wake for it. Nothing: sleep until an event, using no CPU.
-        match self.deadline {
+        let due = match (self.deadline, self.desk.due()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match due {
             Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The toolkit's slider, given `travel_rect`, puts the value where the kit draws the knob, so a press on the knob
+    /// keeps the value and a press elsewhere takes the value under the pointer.
+    #[test]
+    fn the_slider_arithmetic_matches_the_drawn_knob() {
+        let r = Rect::new(100.0, 50.0, 200.0, 28.0);
+        let s = Setting::EffectLevel(0);
+        let sl = slider_for(s, Val::Int(62)).unwrap();
+        let t = travel_rect(s, r);
+        // The kit's knob: 7 px in from each end.
+        let kx = r.x + 7.0 + 0.62 * (r.w - 14.0);
+        assert_eq!(s.val_of(sl.value_at(t, kx, r.cy())), Val::Int(62));
+        assert_eq!(s.val_of(sl.value_at(t, r.x, r.cy())), Val::Int(0));
+        assert_eq!(s.val_of(sl.value_at(t, r.right(), r.cy())), Val::Int(100));
+        // Upright, in steps of half a dB: the top is +12.
+        let band = Setting::EqBand(2);
+        let v = slider_for(band, Val::Int(25)).unwrap();
+        let vr = Rect::new(10.0, 10.0, 30.0, 172.0);
+        let tv = travel_rect(band, vr);
+        assert_eq!(band.val_of(v.value_at(tv, vr.cx(), vr.y)), Val::Int(120));
+        let ky = vr.bottom() - 7.0 - (2.5 + 12.0) / 24.0 * (vr.h - 14.0);
+        assert_eq!(band.val_of(v.value_at(tv, vr.cx(), ky)), Val::Int(25));
+        // Noise reduction moves in steps of 20.
+        let nr = slider_for(Setting::NoiseReduction, Val::Int(40)).unwrap();
+        let x = r.x + 7.0 + 0.55 * (r.w - 14.0);
+        assert_eq!(
+            Setting::NoiseReduction.val_of(nr.value_at(t, x, r.cy())),
+            Val::Int(60)
+        );
+    }
+
+    #[test]
+    fn a_drag_follows_the_pointer_and_ends_on_release() {
+        let r = Rect::new(0.0, 0.0, 214.0, 28.0);
+        let s = Setting::EffectLevel(3);
+        let mut sl = slider_for(s, Val::Int(0)).unwrap();
+        let t = travel_rect(s, r);
+        assert!(sl.press(t, 107.0, 14.0));
+        assert_eq!(s.val_of(sl.value()), Val::Int(50));
+        assert!(sl.drag(t, 207.0, 14.0));
+        assert_eq!(s.val_of(sl.value()), Val::Int(100));
+        // Off the track the value stays at the end.
+        sl.drag(t, 400.0, 90.0);
+        assert_eq!(s.val_of(sl.value()), Val::Int(100));
+        assert!(sl.release());
+        assert!(!sl.drag(t, 7.0, 14.0));
     }
 }

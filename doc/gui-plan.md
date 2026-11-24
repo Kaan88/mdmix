@@ -5,7 +5,8 @@ This is the plan for building `doc/mockups/01-sbc-sidebar.html` as the real GUI.
 `doc/rust-port.md`: the GUI is built on the user's `mdshared-ui` toolkit
 (github.com/Kaan88/markdown-shared-rs), not on egui.
 
-Written 2026-11-24. Step G2 is built (see its note under Order of work); the rest has not been built or run yet.
+Written 2026-11-24. Steps G2, G3 and the G4 pages are built (see their notes under Order of work); the shared slider was
+not needed as a new branch (the toolkit's `slider` at the pinned rev is used). The rest has not been built or run yet.
 
 ## Rules this plan keeps
 
@@ -242,6 +243,56 @@ shot (`shot.rs` keys the frame with `frost::key_out` over a sample wallpaper); a
 mdedit. `#![forbid(unsafe_code)]` holds: the platform calls (`style_window`, `set_backdrop`, the corners) are the
 toolkit's, and the window handle comes from `raw-window-handle` without `unsafe`.
 
+### G3/G4: Run / Not verified (2026-11-24, Windows, cargo 1.99.1)
+
+**Built:** the write path and the pages that need only switches, segments, sliders and dropdowns. **Not run on the
+G6:** no write in this step went to a device; everything below was checked against a fake device in the tests.
+
+- **What writes** (HID only, each control one `g6` flag, through `g6_proto::apply::Action::batches`, so the reports are
+  the CLI's; `intent.rs`): SBX (`--sbx`), Scout Mode (`--scout-mode`), each effect's switch and level
+  (`--sbx-surround`, `--sbx-surround-value`, and so for Crystalizer, Bass, Smart Volume, Dialog+), Smart Volume's Loud
+  and Night (`--sbx-smart-volume-special-value`); the output (`--set-output`; sidebar, Playback, Mixer), Direct mode
+  (`--playback-direct-mode`; Playback, Mixer), SPDIF-Out Direct (`--playback-spdif-out-direct-mode`), headphone
+  virtualization to Line Out (`--playback-line-out-headphone-virtualization`), the decoder's dynamic range
+  (`--decoder-mode`), the DAC filter (`--playback-filter`); EQ on/off (`--eq`), the preset for the output in use
+  (`--eq-preset ID --eq-preset-output OUT`), the preamp (`--eq-preamp`) and the ten bands (`--eq-band FREQ DB`), in
+  half-dB steps; mic boost (`--recording-mic-boost-db`; Microphone, Mixer), Voice Clarity, noise reduction (steps of
+  20), echo cancellation, Smart Volume, Mic EQ and its preset (`--recording-voice-clarity*`); lighting off
+  (`--lighting-disable`), a static colour from eight (`--lighting-rgb R G B`, which also turns the light on; the
+  switch turns it on again in the colour set last), the volume ring (`--lighting-volume-ring`).
+- **What stays read only, with the reason in the control's tip** (`kit::Why`): Windows' volumes and mutes, the
+  master volume and every mixer strip (Core Audio stays read only, and the Rust port has no USB Audio Control writes);
+  the speaker setup (how SBC writes it is unknown, step G9); the lighting effects (they need the effects thread, step
+  G7); Smart Volume's Normal (the CLI has no write for it). With the G6 away or not read yet, every device control is
+  inert and says so.
+- **Design.** `intent::Setting` and `Val` are one user action. `desk::Desk` keeps the pending value per setting, drawn
+  over the model until a read-back answers it (`Desk::shown`; the controls glide to it like a read). A dragged slider
+  (the toolkit's `slider::Slider` does the press, drag and release arithmetic; the pointer is held until release, the
+  look is the kit's) sends at most one write per 80 ms; the value in between waits and is sent when its time comes;
+  the release always sends the last value. The worker (`worker.rs`) merges what waits in its channel (a newer write of
+  a setting replaces the waiting one and goes last), sends the writes, then reads the whole status and hands back one
+  result. Reconcile: read-back equal, the pending value clears with a toast ("SBX Surround set to 62 %. Ctrl+Z undoes
+  it."); a refused write or another value read back drops it, so the control springs back, with an error toast. A
+  change the G6 makes to another setting (the last SBX effect off turns SBX off) is just the read-back. Undo (Ctrl+Z,
+  no toast button) re-sends the value from before the last confirmed change as a new write, one step, not for the
+  output, Direct mode or a preset. A turn whose read fails drops every pending value and shows the away banner. The
+  colour can't be read, so the one written is kept for the session and the toast says it wasn't read back.
+- **Run:** `cargo fmt --all --check`, `cargo clippy --release --workspace --all-targets -- -D warnings`,
+  `cargo test --release --workspace` (76 tests in `g6-gui`, 121 in the workspace), `cargo build -p g6-gui --release`,
+  `python -m pytest -q` (1302 passed). `--shots` renders 56 pictures as before. The tests: every setting's reports equal
+  `writes.json` for every case one setting stands for; a click on a drawn switch sends exactly the CLI's reports; a
+  drag of 100 moves sends at most 6 writes over 400 ms and the release sends the last value; read-back clears the
+  pending value; a refusal and a different read-back spring back with a toast; the G6 gone drops pending writes and
+  shows it away; Undo re-sends the old value; the mixer strips, the speaker setup and the effects stay inert; nothing
+  writes while the G6 is away or not read.
+- **Not verified:** any write on the real G6, and so everything about the device's side: the read-back after each
+  write (the worker reads the whole status, about 46 queries, after every turn; while dragging that may make the
+  turns slower than 80 ms, which the merging absorbs), the 80 ms figure, what Direct mode off restores, an output
+  switch's own EQ rewrite (the CLI's `--set-output` sends 28 to 30 reports). Nothing was clicked in a window: the
+  pointer capture, the dropdown lists (the toolkit's `menu`, Esc, arrows, Enter, the wheel), Ctrl+Z and the timer that
+  sends a waiting drag value were only exercised through their parts in tests. No keyboard nudge for sliders. The
+  EQ curve's handles aren't draggable; the band sliders under it are.
+
 ## Motion (step G3, written 2026-11-24)
 
 Built on the toolkit's `anim` module (`docs/ANIMATION.md` of markdown-shared-rs), pinned to its pushed `feat/anim`
@@ -269,7 +320,7 @@ shows rest only. Reduced motion was not tried live.
   the master volume) glide to a new reading; Retry, Refresh and card buttons fade their fill. Widgets are named by
   page and draw order, so a value seen for the first time (start, a page's first draw, the first read) is drawn at
   rest with no motion. A layout that changes (a row appears) makes the widgets after it start fresh, which is never wrong.
-- **Overlays:** the toast fades and rises 8 px in and fades out (`Transient`); the "Device read only" tip fades; the
+- **Overlays:** the toast fades and rises 8 px in and fades out (`Transient`); the tip over a read-only control fades; the
   settings dialog fades in and out as one picture. The toolkit's `Form` draws its own dimming and has no animator, so
   the dialog does not rise and the dimming cannot be separated from the card.
 - **Scrolling:** wheel and keys move a `SmoothScroll` target and the page glides on a spring. There is no thumb drag in

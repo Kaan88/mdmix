@@ -59,7 +59,7 @@ pub fn filter_labels() -> Vec<&'static str> {
     PlaybackFilter::ALL.iter().map(|f| f.label()).collect()
 }
 
-pub const MIC_EQ_LABELS: [&str; 2] = ["Preset 10", "Custom"];
+pub const MIC_EQ_LABELS: [&str; 3] = ["Preset 10", "Preset DM 1", "Custom"];
 
 pub fn filter_label(s: &DeviceStatus) -> Option<String> {
     let name = s.dac_filter.as_deref()?;
@@ -71,11 +71,18 @@ pub fn filter_label(s: &DeviceStatus) -> Option<String> {
 
 /// "PRESET_3" is "Preset 3"; the eight gains of a curve that matches no preset are "Custom".
 pub fn mic_eq_label(s: &DeviceStatus) -> Option<String> {
-    let v = s.mic_eq_preset.as_deref()?;
-    Some(match v.strip_prefix("PRESET_") {
-        Some(n) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => format!("Preset {n}"),
+    Some(mic_eq_name(s.mic_eq_preset.as_deref()?))
+}
+
+/// A mic EQ preset's name as shown: "PRESET_3" is "Preset 3", "PRESET_DM_1" is "Preset DM 1", anything else (the
+/// gains of a curve that matches no preset) "Custom".
+pub fn mic_eq_name(v: &str) -> String {
+    match v.strip_prefix("PRESET_") {
+        Some(n) if !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            format!("Preset {}", n.replace('_', " "))
+        }
         _ => "Custom".to_string(),
-    })
+    }
 }
 
 pub fn mic_boost_index(s: &DeviceStatus) -> Option<usize> {

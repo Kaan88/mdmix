@@ -7,7 +7,10 @@
 
 use mdshared_ui::anim::{Animator, Edge, PageEffect, PageTransition, Policy, Transient};
 use mdshared_ui::gfx::{Painter, Rect};
+use mdshared_ui::menu::Menu;
 use mdshared_ui::settings::pages::Form;
+
+use crate::kit::{Hit, Why};
 
 /// The new page rises into place from this far below, in logical px (WinUI's entrance moves a page about this far).
 pub const PAGE_RISE: f32 = 20.0;
@@ -20,8 +23,10 @@ pub struct Fx {
     pub toast: Transient<String>,
     /// The settings dialog, after it was closed and while it fades out.
     pub leaving: Option<Form>,
-    /// Where the tooltip was last shown, kept for its fade-out.
-    pub tip: Option<Rect>,
+    /// Where the tooltip was last shown and why, kept for its fade-out.
+    pub tip: Option<(Rect, Why)>,
+    /// A dropdown's open list of choices; each item is the click it stands for.
+    pub menu: Option<Menu<Hit>>,
 }
 
 impl Fx {
@@ -34,6 +39,7 @@ impl Fx {
             toast: Transient::new(),
             leaving: None,
             tip: None,
+            menu: None,
         }
     }
 

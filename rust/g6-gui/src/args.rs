@@ -9,7 +9,7 @@ use crate::prefs::Theme;
 use crate::sample::Sample;
 
 pub const USAGE: &str = "\
-g6-gui: the Sound BlasterX G6 control panel (step G2: reads the device, writes nothing)
+g6-gui: the Sound BlasterX G6 control panel (steps G2 to G4: reads the device and writes the HID settings the g6 CLI writes)
 
 USAGE
   g6-gui [--page <page>]

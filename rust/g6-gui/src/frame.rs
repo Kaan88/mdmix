@@ -19,7 +19,8 @@ use mdshared_ui::settings::pages::Form;
 use crate::facts::{self, DASH};
 use crate::fx::Fx;
 use crate::icons;
-use crate::kit::{self, Env, Hit, Hits, Tone, chrome_pal};
+use crate::intent::Setting;
+use crate::kit::{self, Bind, Env, Hit, Hits, Tone, Why, chrome_pal};
 use crate::model::{Conn, Model, Page};
 use crate::pages;
 use crate::prefs::Prefs;
@@ -42,6 +43,8 @@ pub struct FrameIn<'a> {
     /// Where the pointer is, for the tip over a control that is read only.
     pub pointer: Option<(f32, f32)>,
     pub pressed: Option<Hit>,
+    /// The slider in hand.
+    pub dragging: Option<Setting>,
     /// Draw the window's own caption buttons (not in `--shot` of a bare page? always true today).
     pub frosted: bool,
 }
@@ -56,9 +59,6 @@ pub struct FrameOut {
     /// The page's viewport, for the wheel.
     pub view: Rect,
 }
-
-pub const READ_ONLY_TIP: &str =
-    "Read only for now: this version shows the G6 and doesn't change it.";
 
 pub fn draw_frame(
     p: &mut Painter,
@@ -75,8 +75,10 @@ pub fn draw_frame(
         toast,
         leaving,
         tip,
+        menu,
     } = fx;
     let mut env = Env::new(pal, input.model, input.hover, input.pressed, anim);
+    env.dragging = input.dragging;
     p.fill(Rect::new(0.0, 0.0, w, h), pal.page);
 
     let title = Rect::new(0.0, 0.0, w, TITLE_H);
@@ -121,23 +123,27 @@ pub fn draw_frame(
             *leaving = None;
         }
     }
-    // A device control that does nothing yet says so, under the pointer; the tip fades in and out.
+    // A dropdown's choices, over the page and the chrome.
+    if let Some(m) = menu.as_mut().filter(|_| dialog_is_none) {
+        m.draw_in(p, &pal, Rect::new(0.0, TITLE_H, w, (h - TITLE_H).max(0.0)));
+    }
+    // A device control that writes nothing says why, under the pointer; the tip fades in and out.
     let over = input
         .pointer
-        .filter(|_| dialog_is_none && leaving.is_none())
+        .filter(|_| dialog_is_none && leaving.is_none() && menu.is_none())
         .and_then(|(x, y)| match env.hits.at_rect(x, y) {
-            Some((Hit::Inert, r)) => Some(r),
+            Some((Hit::Inert(why), r)) => Some((r, why)),
             _ => None,
         });
     if over.is_some() {
         *tip = over;
     }
-    if let Some(anchor) = *tip {
+    if let Some((anchor, why)) = *tip {
         let t = env
             .anim
             .presence("tip", over.is_some(), fluent::ENTER, fluent::FADE);
         if t > 0.0 {
-            Bubble::tip(p, READ_ONLY_TIP, anchor, w, h).draw_presence(p, &pal, t);
+            Bubble::tip(p, why.text(), anchor, w, h).draw_presence(p, &pal, t);
         } else if over.is_none() {
             *tip = None;
         }
@@ -308,22 +314,31 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     );
     y += 36.0 + 10.0;
 
-    // Output: two equal halves, the one in use in the accent. Read only: inert, in full colour.
+    // Output: two equal halves, the one in use in the accent. A click on the other switches (--set-output).
     let out_r = Rect::new(x, y, inner, kit::SEG_H);
-    kit::draw_seg_with(
+    let bind = Bind::Live(Setting::Output);
+    let out_hits: Vec<Hit> = (0..facts::OUTPUTS.len())
+        .map(|k| kit::seg_hit(env, bind, k))
+        .collect();
+    let hovered = out_hits
+        .iter()
+        .position(|h| h.acts() && env.hover == Some(*h));
+    let rects = kit::draw_seg_with(
         p,
         &live,
         Some((&mut *env.anim, Id::new("side-output"))),
         out_r,
         &facts::OUTPUTS,
         facts::output_index(&m.status),
-        None,
+        hovered,
         kit::SegKind {
             small: false,
             fill: true,
         },
     );
-    env.hits.add(Hit::Inert, out_r);
+    for (hit, rc) in out_hits.into_iter().zip(rects) {
+        env.hits.add(hit, rc);
+    }
     y += kit::SEG_H + 10.0;
 
     // Master volume: it is Core Audio's, so it is a dash until Windows gives it.
@@ -345,7 +360,8 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
             .value("side-volume", f32::from(v) / 100.0, fluent::MOVE)
     });
     kit::slider(p, &live, track, frac, false, live.pane);
-    env.hits.add(Hit::Inert, Rect::new(x, y, inner, 28.0));
+    env.hits
+        .add(Hit::Inert(Why::Windows), Rect::new(x, y, inner, 28.0));
     p.text_right(
         Face::Ui,
         kit::SIZE_VALUE,
@@ -396,7 +412,7 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
             fill: false,
         },
     );
-    env.hits.add(Hit::Inert, lay_r);
+    env.hits.add(Hit::Inert(Why::SpeakerSetup), lay_r);
     y += kit::SEG_H_SM + 10.0;
 
     // The pages: 34 high, 2 apart, the current one on the `on` fill with the accent mark. The mark and its fill slide
@@ -531,8 +547,7 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
         pal.text,
         w,
     );
-    let mut tags = pages::tags(page, input.model);
-    tags.push(("Device read only".into(), Tone::Quiet));
+    let tags = pages::tags(page, input.model);
     let tags_w: f32 = tags
         .iter()
         .map(|(t, _)| kit::badge_w(p, t) + 6.0)
@@ -647,6 +662,7 @@ mod tests {
             hover: None,
             pointer: None,
             pressed: None,
+            dragging: None,
             frosted: false,
         };
         let out = draw_frame(&mut p, &input, None, &mut Fx::still());
@@ -727,13 +743,13 @@ mod tests {
     #[test]
     fn a_read_only_control_is_inert_and_a_click_on_it_does_nothing() {
         let (_, out) = render(Page::Playback, Sample::Live, LIGHT, (1100.0, 720.0));
-        assert!(!Hit::Inert.acts() && !Hit::Drag.acts());
+        assert!(!Hit::Inert(Why::Windows).acts() && !Hit::Drag.acts());
         assert!(Hit::Retry.acts() && Hit::Nav(Page::Sbx).acts() && Hit::Theme(0).acts());
         // The controls of the page are there to be found, as inert regions.
         let found = (0..1100).step_by(6).any(|x| {
             (60..720)
                 .step_by(6)
-                .any(|y| matches!(out.hits.at(x as f32, y as f32), Some(Hit::Inert)))
+                .any(|y| matches!(out.hits.at(x as f32, y as f32), Some(Hit::Inert(_))))
         });
         assert!(found);
     }
@@ -758,6 +774,7 @@ mod tests {
             hover: None,
             pointer: at,
             pressed: None,
+            dragging: None,
             frosted: false,
         };
         draw_frame(&mut p, &input, form.as_mut(), &mut Fx::still());
@@ -770,7 +787,7 @@ mod tests {
         let at = (0..1100)
             .step_by(4)
             .flat_map(|x| (60..720).step_by(4).map(move |y| (x as f32, y as f32)))
-            .find(|&(x, y)| matches!(out.hits.at(x, y), Some(Hit::Inert)))
+            .find(|&(x, y)| matches!(out.hits.at(x, y), Some(Hit::Inert(_))))
             .expect("an inert control");
         assert_ne!(frame_pixels(Some(at), false), frame_pixels(None, false));
         assert_eq!(frame_pixels(Some(at), true), frame_pixels(None, true));
@@ -845,6 +862,7 @@ mod tests {
                 hover,
                 pointer: None,
                 pressed: None,
+                dragging: None,
                 frosted: false,
             };
             let mut p = Painter::new(&mut self.bmp, &mut self.gfx, 1.0);

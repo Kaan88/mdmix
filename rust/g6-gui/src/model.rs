@@ -1,6 +1,7 @@
 //! What the window shows: the last status read from the G6, whether the G6 is there, and the pages.
 //!
-//! In step G2 the model is only ever replaced by a whole status read. Nothing here writes.
+//! The model is replaced by each whole status read. What a write asked for and hasn't been read back yet is kept apart,
+//! in `desk::Desk`, and drawn over it.
 
 use g6_proto::status::DeviceStatus;
 
@@ -194,6 +195,8 @@ pub struct Model {
     pub have_status: bool,
     pub conn: Conn,
     pub mixer: Option<MixerView>,
+    /// The static colour written last in this session: the G6 can't be asked for it.
+    pub colour: Option<[u8; 3]>,
 }
 
 impl Model {
@@ -204,6 +207,7 @@ impl Model {
             have_status: false,
             conn: Conn::Reading,
             mixer: None,
+            colour: None,
         }
     }
 
@@ -214,6 +218,7 @@ impl Model {
             have_status: true,
             conn: Conn::Connected,
             mixer,
+            colour: None,
         }
     }
 

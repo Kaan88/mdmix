@@ -1,7 +1,8 @@
 //! The drawing kit of the pages: controls in the toolkit's look, cards of rows, and the grid the cards flow in.
 //!
-//! Step G2 draws every device control as it is on the device and inert: no hit is recorded for it. The few live
-//! controls (pages, Retry, Refresh, the appearance choices) carry a [`Hit`].
+//! A device control is bound ([`Bind`]) to the [`Setting`] it writes, and its regions then carry the value a click
+//! asks for ([`Hit::Set`]), the slider to take hold of ([`Hit::Slide`]) or the dropdown to open ([`Hit::Open`]). One
+//! the window doesn't write is inert, and its region says why ([`Hit::Inert`] and [`Why`]), for the pointer's tip.
 
 use std::hash::Hash;
 
@@ -11,6 +12,7 @@ use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
 use mdshared_ui::theme::Palette;
 
+use crate::intent::{Setting, Val};
 use crate::model::{Model, Page};
 
 /// What a click on a region does.
@@ -28,8 +30,66 @@ pub enum Hit {
     Corners(usize),
     /// The empty part of the title row: drags the window.
     Drag,
-    /// A device control that step G2 draws but does not act on: the pointer says so and a tip explains.
-    Inert,
+    /// A click writes this value of this setting to the G6.
+    Set(Setting, Val),
+    /// A slider of this setting: pressed, it is taken hold of and dragged.
+    Slide(Setting),
+    /// A dropdown of this setting: a click opens its choices.
+    Open(Setting),
+    /// A device control the window doesn't change: the pointer says so and a tip says why.
+    Inert(Why),
+}
+
+/// Why a control doesn't write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Why {
+    /// Windows' volume or mute (Core Audio): read, never changed.
+    Windows,
+    /// The speaker setup: how SoundBlaster Command writes it isn't known (step G9).
+    SpeakerSetup,
+    /// The lighting effects run from this computer and need their thread (step G7).
+    Effects,
+    /// The command line has no write for this choice.
+    NoWrite,
+    /// The G6 is away.
+    Away,
+    /// The G6 hasn't been read yet.
+    NotRead,
+    /// The light can't be turned on without a colour, and the G6 can't be asked for its colour.
+    NoColour,
+    /// The preset's curve depends on the output, which isn't known.
+    NoOutput,
+}
+
+impl Why {
+    /// The tip over the control.
+    pub fn text(self) -> &'static str {
+        match self {
+            Why::Windows => {
+                "Read only: this is Windows' setting (Core Audio). Change it in Windows' sound settings."
+            }
+            Why::SpeakerSetup => {
+                "Read only: how SoundBlaster Command writes the speaker setup isn't known yet."
+            }
+            Why::Effects => {
+                "Not built yet: effects run from this computer. The command line has them (g6 --lighting-effect)."
+            }
+            Why::NoWrite => "Read only: the command line has no write for this choice.",
+            Why::Away => "The G6 is not connected.",
+            Why::NotRead => "Not read from the G6 yet.",
+            Why::NoColour => {
+                "The G6 can't be asked which colour it had: pick a colour below to turn the light on."
+            }
+            Why::NoOutput => "The output isn't known, so the preset's curve can't be chosen.",
+        }
+    }
+}
+
+/// What a control is bound to: the setting it writes, or why it writes nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bind {
+    Live(Setting),
+    Off(Why),
 }
 
 /// The regions the last frame drew, in drawing order; the one drawn last is on top.
@@ -39,7 +99,7 @@ pub struct Hits(Vec<(Hit, Rect)>);
 impl Hit {
     /// Whether a click on the region does anything: the title row drags the window and a read-only control is inert.
     pub fn acts(self) -> bool {
-        !matches!(self, Hit::Drag | Hit::Inert)
+        !matches!(self, Hit::Drag | Hit::Inert(_))
     }
 }
 
@@ -80,7 +140,12 @@ impl Hits {
             .map(|(h, _)| *h)
     }
 
+    /// Every region, in drawing order.
     #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = (Hit, Rect)> + '_ {
+        self.0.iter().copied()
+    }
+
     pub fn rect_of(&self, hit: Hit) -> Option<Rect> {
         self.0
             .iter()
@@ -100,6 +165,8 @@ pub struct Env<'a> {
     pub pressed: Option<Hit>,
     /// The window's animated values. Every widget that moves asks it for its current value while it draws.
     pub anim: &'a mut Animator,
+    /// The slider in hand: it follows the pointer without gliding.
+    pub dragging: Option<Setting>,
     /// What the page's widgets are named under, so a switch of page never moves one page's knob into the next's.
     scope: Id,
     /// How many widgets of the page asked for a name so far this frame: the order they are drawn in is their name.
@@ -121,6 +188,7 @@ impl<'a> Env<'a> {
             hover,
             pressed,
             anim,
+            dragging: None,
             scope: Id::new("env"),
             seq: 0,
         }
@@ -138,6 +206,27 @@ impl<'a> Env<'a> {
     fn next_id(&mut self) -> Id {
         self.seq += 1;
         self.scope.with(self.seq)
+    }
+
+    /// Whether a bound control may write now: the G6 must be there and read.
+    pub fn gate(&self, bind: Bind) -> Result<Setting, Why> {
+        match bind {
+            Bind::Off(why) => Err(why),
+            Bind::Live(_) if matches!(self.model.conn, crate::model::Conn::Away(_)) => {
+                Err(Why::Away)
+            }
+            Bind::Live(_) if !self.model.have_status => Err(Why::NotRead),
+            Bind::Live(s) => Ok(s),
+        }
+    }
+
+    /// The region of a switch: a click asks for the other state.
+    pub fn toggle_hit(&self, on: Option<bool>, bind: Bind) -> Hit {
+        match (self.gate(bind), on) {
+            (Err(why), _) => Hit::Inert(why),
+            (Ok(_), None) => Hit::Inert(Why::NotRead),
+            (Ok(s), Some(v)) => Hit::Set(s, Val::On(!v)),
+        }
     }
 
     pub fn is_hover(&self, hit: Hit) -> bool {
@@ -166,10 +255,23 @@ impl<'a> Env<'a> {
         }
     }
 
-    /// A slider's fraction, gliding to a new reading. `None` (not read) stays `None`.
-    pub fn glide(&mut self, frac: Option<f32>) -> Option<f32> {
+    /// A slider's fraction, gliding to a new reading. `None` (not read) stays `None`. The slider in hand (`held`)
+    /// is where the pointer put it, at once.
+    pub fn glide(&mut self, frac: Option<f32>, held: bool) -> Option<f32> {
         let id = self.next_id();
-        frac.map(|f| self.anim.value(id, f, fluent::MOVE))
+        frac.map(|f| {
+            if held {
+                self.anim.set(id, f);
+                f
+            } else {
+                self.anim.value(id, f, fluent::MOVE)
+            }
+        })
+    }
+
+    /// Whether this bound slider is the one in hand.
+    pub fn held(&self, bind: Bind) -> bool {
+        matches!(bind, Bind::Live(s) if self.dragging == Some(s))
     }
 
     /// A segmented choice with motion: the chosen fill slides, the hover fades.
@@ -600,24 +702,28 @@ pub fn wrap(p: &mut Painter, face: Face, size: f32, text: &str, w: f32) -> Vec<S
 /// What sits at the right of a row.
 #[derive(Clone, Debug)]
 pub enum Ctl {
-    Toggle(Option<bool>),
-    /// A segmented choice. `live` makes each segment a hit (`Hit` built from its index).
+    Toggle(Option<bool>, Bind),
+    /// A segmented choice. `live` makes each segment a hit (`Hit` built from its index) for the app's own settings;
+    /// `bind` makes each segment write its value (`Setting::seg_val`).
     Seg {
         labels: Vec<String>,
         sel: Option<usize>,
         live: Option<fn(usize) -> Hit>,
         small: bool,
+        bind: Bind,
     },
     /// A slider with its reading. `frac` is 0 to 1, `None` when the value is not known.
     Slider {
         frac: Option<f32>,
         reading: String,
         from_middle: bool,
+        bind: Bind,
     },
     /// A dropdown showing `text`, wide enough for the widest of `options` as well.
     Dropdown {
         text: String,
         options: Vec<String>,
+        bind: Bind,
     },
     /// Text, right aligned: a number, a version.
     Value {
@@ -707,33 +813,48 @@ fn seg_ctl(
     sel: Option<usize>,
     live: Option<fn(usize) -> Hit>,
     small: bool,
+    bind: Bind,
 ) -> Ctl {
     Ctl::Seg {
         labels: labels.iter().map(|s| s.to_string()).collect(),
         sel,
         live,
         small,
+        bind,
     }
 }
 
-pub fn seg(labels: &[&str], sel: Option<usize>) -> Ctl {
-    seg_ctl(labels, sel, None, false)
+pub fn seg(labels: &[&str], sel: Option<usize>, bind: Bind) -> Ctl {
+    seg_ctl(labels, sel, None, false, bind)
 }
 
 /// The small kind (24 high): the mockup's `.seg.sm`.
-pub fn seg_sm(labels: &[&str], sel: Option<usize>) -> Ctl {
-    seg_ctl(labels, sel, None, true)
+pub fn seg_sm(labels: &[&str], sel: Option<usize>, bind: Bind) -> Ctl {
+    seg_ctl(labels, sel, None, true, bind)
 }
 
 pub fn live_seg(labels: &[&str], sel: Option<usize>, hit: fn(usize) -> Hit) -> Ctl {
-    seg_ctl(labels, sel, Some(hit), false)
+    seg_ctl(labels, sel, Some(hit), false, Bind::Off(Why::NoWrite))
 }
 
 /// A dropdown showing `text` that is wide enough for the longest of `options`.
-pub fn dd(text: impl Into<String>, options: &[&str]) -> Ctl {
+pub fn dd(text: impl Into<String>, options: &[&str], bind: Bind) -> Ctl {
     Ctl::Dropdown {
         text: text.into(),
         options: options.iter().map(|s| s.to_string()).collect(),
+        bind,
+    }
+}
+
+/// The region of segment `k` of a bound choice: the value it writes, or why it writes nothing.
+pub fn seg_hit(env: &Env, bind: Bind, k: usize) -> Hit {
+    match env.gate(bind) {
+        Err(why) => Hit::Inert(why),
+        Ok(s) => match s.seg_val(k) {
+            // The chosen one is there already: a click on it asks for what the G6 has, which sends nothing.
+            Some(v) => Hit::Set(s, v),
+            None => Hit::Inert(Why::NoWrite),
+        },
     }
 }
 
@@ -779,6 +900,8 @@ pub struct Card<'a> {
     pub title: String,
     /// A switch in the header, as the mockup's cards have.
     pub head: Option<Option<bool>>,
+    /// What the header's switch writes.
+    pub head_bind: Bind,
     /// What is written before the header's switch ("Mute mix").
     pub head_label: Option<String>,
     pub parts: Vec<Part<'a>>,
@@ -794,6 +917,7 @@ impl<'a> Card<'a> {
         Card {
             title: title.into(),
             head: None,
+            head_bind: Bind::Off(Why::NoWrite),
             head_label: None,
             parts: vec![Part::Items(items)],
             span: false,
@@ -801,8 +925,9 @@ impl<'a> Card<'a> {
             rack: None,
         }
     }
-    pub fn head(mut self, on: Option<bool>) -> Card<'a> {
+    pub fn head(mut self, on: Option<bool>, bind: Bind) -> Card<'a> {
         self.head = Some(on);
+        self.head_bind = bind;
         self
     }
     pub fn head_label(mut self, label: &str) -> Card<'a> {
@@ -856,7 +981,7 @@ pub fn strip_w(p: &mut Painter, names: &[String], master: bool) -> f32 {
 /// What a control wants of a row: its width, and the least it can be squeezed to.
 fn ctl_want(p: &mut Painter, ctl: &Ctl, inner_w: f32) -> (f32, f32) {
     match ctl {
-        Ctl::Toggle(_) => (TOGGLE_W, TOGGLE_W),
+        Ctl::Toggle(..) => (TOGGLE_W, TOGGLE_W),
         Ctl::Seg { labels, small, .. } => {
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
             let w = seg_width(p, &refs, *small).ceil();
@@ -867,7 +992,7 @@ fn ctl_want(p: &mut Painter, ctl: &Ctl, inner_w: f32) -> (f32, f32) {
             let track = (inner_w * 0.5).clamp(110.0, 240.0);
             (track + 10.0 + rw, 96.0 + 10.0 + rw)
         }
-        Ctl::Dropdown { text, options } => {
+        Ctl::Dropdown { text, options, .. } => {
             let w = dropdown_want(p, text, options);
             (w, w.min(130.0))
         }
@@ -885,7 +1010,7 @@ fn ctl_want(p: &mut Painter, ctl: &Ctl, inner_w: f32) -> (f32, f32) {
 
 fn ctl_height(ctl: &Ctl) -> f32 {
     match ctl {
-        Ctl::Toggle(_) => TOGGLE_H,
+        Ctl::Toggle(..) => TOGGLE_H,
         Ctl::Seg { small: true, .. } => SEG_H_SM,
         Ctl::Seg { .. } | Ctl::Dropdown { .. } | Ctl::Button { .. } => 28.0,
         Ctl::Slider { .. } | Ctl::Value { .. } => 28.0,
@@ -1061,21 +1186,30 @@ fn draw_ctl(
         )
     };
     match ctl {
-        Ctl::Toggle(on) => {
+        Ctl::Toggle(on, bind) => {
             let b = place(TOGGLE_W, TOGGLE_H);
             env.toggle(p, pal, b, *on);
-            env.hits.add(Hit::Inert, b);
+            let hit = env.toggle_hit(*on, *bind);
+            env.hits.add(hit, b);
         }
         Ctl::Seg {
             labels,
             sel,
             live,
             small,
+            bind,
         } => {
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
             let w = seg_width(p, &refs, *small).ceil();
             let seg_r = place(w, if *small { SEG_H_SM } else { SEG_H });
-            let hovered = live.and_then(|mk| (0..labels.len()).find(|&k| env.hover == Some(mk(k))));
+            let hits: Option<Vec<Hit>> = match (live, env.gate(*bind)) {
+                (Some(mk), _) => Some((0..labels.len()).map(mk).collect()),
+                (None, Ok(_)) => Some((0..labels.len()).map(|k| seg_hit(env, *bind, k)).collect()),
+                (None, Err(_)) => None,
+            };
+            let hovered = hits
+                .as_ref()
+                .and_then(|hs| hs.iter().position(|h| h.acts() && env.hover == Some(*h)));
             let rects = env.seg(
                 p,
                 pal,
@@ -1088,32 +1222,54 @@ fn draw_ctl(
                     fill: false,
                 },
             );
-            match live {
-                Some(mk) => {
-                    for (k, rc) in rects.iter().enumerate() {
-                        env.hits.add(mk(k), *rc);
+            match (hits, env.gate(*bind)) {
+                (Some(hs), _) => {
+                    for (h, rc) in hs.into_iter().zip(&rects) {
+                        env.hits.add(h, *rc);
                     }
                 }
-                None => env.hits.add(Hit::Inert, seg_r),
+                (None, Err(why)) => env.hits.add(Hit::Inert(why), seg_r),
+                (None, Ok(_)) => {}
             }
         }
         Ctl::Slider {
             frac,
             reading,
             from_middle,
+            bind,
         } => {
             let rw = reading_w(p, reading);
             let track = Rect::new(r.x, r.y, (r.w - rw - 10.0).max(40.0), r.h);
-            let frac = env.glide(*frac);
+            let held = env.held(*bind);
+            let frac = env.glide(*frac, held);
             slider(p, pal, track, frac, *from_middle, ground);
             p.text_right(Face::Ui, SIZE_VALUE, r.right(), r.cy(), reading, pal.muted);
-            env.hits.add(Hit::Inert, Rect::new(r.x, r.y, r.w, r.h));
+            let hit = match (env.gate(*bind), frac) {
+                (Ok(s), Some(_)) => Hit::Slide(s),
+                (Ok(_), None) => Hit::Inert(Why::NotRead),
+                (Err(why), _) => Hit::Inert(why),
+            };
+            // A live slider is taken by its track; a read-only one says why over its whole row.
+            let area = if matches!(hit, Hit::Slide(_)) {
+                track
+            } else {
+                Rect::new(r.x, r.y, r.w, r.h)
+            };
+            env.hits.add(hit, area);
         }
-        Ctl::Dropdown { text, options } => {
+        Ctl::Dropdown {
+            text,
+            options,
+            bind,
+        } => {
             let w = dropdown_want(p, text, options);
             let b = place(if left { r.w } else { w }, CTL_H);
             dropdown(p, pal, b, text);
-            env.hits.add(Hit::Inert, b);
+            let hit = match env.gate(*bind) {
+                Ok(s) => Hit::Open(s),
+                Err(why) => Hit::Inert(why),
+            };
+            env.hits.add(hit, b);
         }
         Ctl::Value { text, mono } => {
             let face = if *mono { Face::Mono } else { Face::Ui };
@@ -1258,7 +1414,8 @@ fn draw_card(p: &mut Painter, env: &mut Env, card: &Card, r: Rect) {
         tx -= TOGGLE_W;
         let b = Rect::new(tx, head_cy - TOGGLE_H / 2.0, TOGGLE_W, TOGGLE_H);
         env.toggle(p, &pal, b, on);
-        env.hits.add(Hit::Inert, b);
+        let hit = env.toggle_hit(on, card.head_bind);
+        env.hits.add(hit, b);
         if let Some(l) = &card.head_label {
             let w = p.measure(Face::Semibold, 11.0, l);
             tx -= 8.0 + w;
@@ -1454,13 +1611,27 @@ mod tests {
     fn a_control_that_does_not_fit_beside_its_label_goes_under_it() {
         let (mut bmp, mut gfx) = painter_parts();
         let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
-        let r = row("Speakers", seg(&["Stereo", "5.1", "7.1"], None));
+        let r = row(
+            "Speakers",
+            seg(
+                &["Stereo", "5.1", "7.1"],
+                None,
+                Bind::Off(Why::SpeakerSetup),
+            ),
+        );
         assert!(!layout_row(&mut p, &r, 400.0).stacked);
         let narrow = layout_row(&mut p, &r, 200.0);
         assert!(narrow.stacked);
         assert!(narrow.h > 34.0);
         // A dropdown shrinks first, and only then stacks.
-        let d = row("DAC filter", dd("Slow Roll-off / Minimum Phase", &[]));
+        let d = row(
+            "DAC filter",
+            dd(
+                "Slow Roll-off / Minimum Phase",
+                &[],
+                Bind::Live(Setting::DacFilter),
+            ),
+        );
         let beside = layout_row(&mut p, &d, 330.0);
         assert!(!beside.stacked);
         assert!(beside.ctl_w >= 130.0);
