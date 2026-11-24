@@ -123,7 +123,7 @@ def record(argv: list[str]) -> dict:
 
 
 def build_writes() -> dict:
-    return {'note': NOTE + " --toggle-output assumes the current output is Headphones (so it switches to Speakers); --eq-preset without --eq-preset-output uses Headphones.",
+    return {'note': NOTE + " --toggle-output switches to Headphones (the toggle state reads as Speakers set last); --eq-preset without --eq-preset-output uses Headphones.",
             'cases': [record(argv) for argv in _cli_cases()]}
 
 

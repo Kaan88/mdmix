@@ -72,6 +72,19 @@ fn any_float(s: &str) -> Result<f64, String> {
     py_float(s).ok_or_else(|| format!("invalid float value: {}", py_str_repr(s)))
 }
 
+/// A time option: NaN and the infinities are refused, as Python's `_seconds` does.
+fn seconds(s: &str) -> Result<f64, String> {
+    let v = any_float(s)?;
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(format!(
+            "must be a finite number of seconds, got {}",
+            py_str_repr(s)
+        ))
+    }
+}
+
 fn filter_names() -> [&'static str; 4] {
     PlaybackFilter::ALL.map(PlaybackFilter::name)
 }
@@ -219,11 +232,11 @@ pub struct Cli {
                   colour. Pulsate uses the --lighting-rgb colour (default red). Music follows the level of what the \
                   G6 plays (Windows), in the --lighting-rgb colour or a slow colour cycle without one.")]
     pub lighting_effect: Option<String>,
-    #[arg(long, help_heading = LIGHTING, value_name = "SECONDS", value_parser = any_float,
+    #[arg(long, help_heading = LIGHTING, value_name = "SECONDS", value_parser = seconds,
           help = "Seconds per round: pulsate dark-bright-dark (default 2), cycle once around the colour wheel \
                   (default 6), music colour cycle (default 12).")]
     pub lighting_effect_period: Option<f64>,
-    #[arg(long, help_heading = LIGHTING, value_name = "SECONDS", value_parser = any_float,
+    #[arg(long, help_heading = LIGHTING, value_name = "SECONDS", value_parser = seconds,
           help = "Stop the effect after this many seconds (default: run until Ctrl+C).")]
     pub lighting_effect_duration: Option<f64>,
 

@@ -244,10 +244,10 @@ impl Action {
         use Action as A;
         Ok(match self {
             A::ToggleOutput => {
-                // Python sends the opposite of the state determine_toggle_state returns (see doc/rust-port.md)
+                // the state just printed and remembered is the one sent
                 hid(match host.next_toggle_state()? {
-                    Output::Speakers => playback::toggle_to_headphones(),
-                    Output::Headphones => playback::toggle_to_speakers(),
+                    Output::Speakers => playback::toggle_to_speakers(),
+                    Output::Headphones => playback::toggle_to_headphones(),
                 })
             }
             A::SetOutput(Output::Speakers) => hid(playback::toggle_to_speakers()),

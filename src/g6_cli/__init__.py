@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os.path
 import sys
 import tempfile
@@ -39,6 +40,17 @@ VERSION = '1.1.0'
 TOGGLE_STATE_TEMP_FILE_NAME = 'g6-cli-toggle-state'
 TOGGLE_STATE_SPEAKERS = 'Speakers'
 TOGGLE_STATE_HEADPHONES = 'Headphones'
+
+
+def _seconds(value: str) -> float:
+    """A float for a time option; NaN and the infinities are refused (a NaN duration never ended)."""
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'invalid float value: {value!r}') from None
+    if not math.isfinite(seconds):
+        raise argparse.ArgumentTypeError(f'must be a finite number of seconds, got {value!r}')
+    return seconds
 
 
 def _channels_from_cli(value: str) -> set[Channel]:
@@ -207,10 +219,10 @@ def parse_cli_args(argv: list[str] | None = None):
                                          'the --lighting-rgb colour (default red). Music follows the level of what '
                                          'the G6 plays (Windows), in the --lighting-rgb colour or a slow colour '
                                          'cycle without one.')
-    lighting_hid_group.add_argument('--lighting-effect-period', required=False, type=float, metavar='SECONDS',
+    lighting_hid_group.add_argument('--lighting-effect-period', required=False, type=_seconds, metavar='SECONDS',
                                     help='Seconds per round: pulsate dark-bright-dark (default 2), cycle once '
                                          'around the colour wheel (default 6), music colour cycle (default 12).')
-    lighting_hid_group.add_argument('--lighting-effect-duration', required=False, type=float, metavar='SECONDS',
+    lighting_hid_group.add_argument('--lighting-effect-duration', required=False, type=_seconds, metavar='SECONDS',
                                     help='Stop the effect after this many seconds (default: run until Ctrl+C).')
 
     #
@@ -531,11 +543,8 @@ def device_toggle_output(api: G6Api):
     """
     # determine the next toggle state
     toggle_state = determine_toggle_state()
-    # toggle playback output
-    if toggle_state == TOGGLE_STATE_SPEAKERS:
-        api.playback_toggle_to_headphones()
-    else:
-        api.playback_toggle_to_speakers()
+    # switch to the state just printed and remembered (this used to send the opposite)
+    device_set_output(api=api, toggle_state=toggle_state)
 
 
 def _current_output(dry_run: bool) -> str:

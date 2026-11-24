@@ -23,6 +23,7 @@ Confidence of each field (as of firmware 2.1.250903.1324):
 from __future__ import annotations
 
 import dataclasses
+import math
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -227,7 +228,8 @@ def _switch(value: Optional[float]) -> Optional[bool]:
 
 
 def _percent(value: Optional[float]) -> Optional[int]:
-    return None if value is None else round(value * 100)
+    # an infinite or NaN reading is unknown, not a crash
+    return None if value is None or not math.isfinite(value) else round(value * 100)
 
 
 def parse_mic_boost(r: Optional[bytes]) -> Optional[int]:

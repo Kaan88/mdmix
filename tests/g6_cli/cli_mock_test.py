@@ -37,7 +37,8 @@ CLI_CASES.append(("reload_alsa_and_pipewire", lambda: ["--reload-audio-services"
 # --- Playback ---
 CLI_CASES.append(("playback_toggle_to_speakers", lambda: ["--set-output", "Speakers"]))
 CLI_CASES.append(("playback_toggle_to_headphones", lambda: ["--set-output", "Headphones"]))
-CLI_CASES.append(("playback_toggle_to_speakers", lambda: ["--toggle-output"]))
+# determine_toggle_state is mocked to return Headphones: the state it returns is the one sent
+CLI_CASES.append(("playback_toggle_to_headphones", lambda: ["--toggle-output"]))
 CLI_CASES.append(("playback_mute", lambda: ["--playback-mute", "Enabled"]))
 CLI_CASES.append(("playback_mute", lambda: ["--playback-mute", "Disabled"]))
 CLI_CASES.append(("playback_volume", lambda: ["--playback-volume", "0"]))
@@ -211,3 +212,24 @@ def test_cli_args_call_g6api_methods(
         method_mock.assert_called_once_with(**kwargs)
     else:
         assert method_mock.call_count >= 1, f"Expected {method_name} to be called, but it was not."
+
+
+@pytest.mark.parametrize('option', ['--lighting-effect-duration', '--lighting-effect-period'])
+@pytest.mark.parametrize('value', ['nan', 'inf', '-inf', 'NaN'])
+def test_time_options_refuse_non_finite(option, value, capsys):
+    with pytest.raises(SystemExit):
+        g6_cli.main(['--dry-run', '--lighting-effect', 'pulsate', f'{option}={value}'])
+    assert 'must be a finite number of seconds' in capsys.readouterr().err
+
+
+def test_toggle_output_sends_the_state_it_prints(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(g6_cli.tempfile, 'gettempdir', lambda: str(tmp_path))
+    sent = []
+    api = MagicMock()
+    api.playback_toggle_to_speakers.side_effect = lambda: sent.append('Speakers')
+    api.playback_toggle_to_headphones.side_effect = lambda: sent.append('Headphones')
+    g6_cli.device_toggle_output(api)  # no state file: "Toggle to Speakers"
+    g6_cli.device_toggle_output(api)  # then "Toggle from Speakers -> Headphones"
+    out = capsys.readouterr().out
+    assert 'Toggle to Speakers' in out and 'Speakers -> Headphones' in out
+    assert sent == ['Speakers', 'Headphones']

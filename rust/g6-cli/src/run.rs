@@ -306,8 +306,7 @@ pub fn run_lighting_effect(
         follower = Some(LevelFollower::default());
     }
     let duration = if dry_run {
-        // Python's min(duration, period) keeps a NaN duration, and the loop then never ends (a Python bug,
-        // reported in doc/rust-port.md; copied, not fixed)
+        // the options are finite (`seconds`), so this ends
         Some(duration.map_or(period, |d| if period < d { period } else { d }))
     } else {
         if duration.is_none() {

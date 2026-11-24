@@ -180,8 +180,7 @@ fn stripped_hex(r: &HidReport) -> String {
 fn replay(case: &Value, tmp: &TempDir) -> Option<String> {
     let argv = strings(&case["argv"]);
     let toggle = tmp.0.join("toggle");
-    // the vectors assume the output is Headphones, so a toggle goes to Speakers: the file says the opposite
-    // state was set last ("Speakers"), which makes Python's determine_toggle_state return Headphones
+    // the vectors run with determine_toggle_state returning Headphones: the file says Speakers was set last
     std::fs::write(&toggle, "Speakers").unwrap();
     let rec = RecordingTransport::default();
     let mut env = TestEnv {
@@ -279,12 +278,12 @@ fn toggle_output_follows_the_state_file() {
     let speakers = stripped_hex(&g6_proto::playback::toggle_to_speakers()[0]);
     let headphones = stripped_hex(&g6_proto::playback::toggle_to_headphones()[0]);
 
-    // no file: "Toggle to Speakers", and (as Python does) the reports for Headphones go out
+    // no file: "Toggle to Speakers", and the reports for Speakers go out
     let o = run(&argv, &mut env);
     assert!(o.result.is_ok());
     assert!(o.out.contains("Toggle to Speakers\n"), "{}", o.out);
     assert_eq!(std::fs::read_to_string(&toggle).unwrap(), "Speakers");
-    assert_eq!(stripped_hex(&rec.log.borrow().hid[0]), headphones);
+    assert_eq!(stripped_hex(&rec.log.borrow().hid[0]), speakers);
 
     rec.log.borrow_mut().hid.clear();
     let o = run(&argv, &mut env);
@@ -294,7 +293,7 @@ fn toggle_output_follows_the_state_file() {
         o.out
     );
     assert_eq!(std::fs::read_to_string(&toggle).unwrap(), "Headphones");
-    assert_eq!(stripped_hex(&rec.log.borrow().hid[0]), speakers);
+    assert_eq!(stripped_hex(&rec.log.borrow().hid[0]), headphones);
 }
 
 #[test]

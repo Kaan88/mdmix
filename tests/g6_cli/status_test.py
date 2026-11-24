@@ -243,3 +243,9 @@ def test_format_status_text_and_json():
     assert 'Direct mode   On' in text
     data = json.loads(format_status(st, as_json=True))
     assert data['output'] == 'Speakers' and data['mode_flags'] == ['0x20', '0x40']
+
+
+@pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
+def test_percent_of_a_non_finite_reading_is_unknown(value):
+    from g6_cli.g6_status import _percent
+    assert _percent(value) is None

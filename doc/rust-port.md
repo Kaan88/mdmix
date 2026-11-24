@@ -65,14 +65,14 @@ Known differences from Python:
   the directory is writable.
 - **Lighting effects** without `--dry-run` need the device; Ctrl+C handling and the music meter come with G1.
 
-Python bugs found (reported, not fixed; the port copies the behaviour):
+Python bugs found during the port, fixed on 2026-11-24 in both versions (tests added in Python and Rust):
 
-- `device_toggle_output` sends the opposite of what it prints: when the state file says the next state is
-  Speakers ("Toggle to Speakers"), it sends `toggle_to_headphones`, and the other way round.
-- `--lighting-effect pulsate --lighting-effect-duration nan --dry-run` never ends: `min(nan, period)` is `nan` and
-  `t >= nan` is never true.
-- `_percent(inf)` in `g6_status` (`round(inf * 100)`) raises `OverflowError`, which `cli_entry` doesn't catch, so a
-  status answer that decodes to infinity ends in a traceback.
+- `device_toggle_output` sent the opposite of what it printed ("Toggle to Speakers" sent `toggle_to_headphones`).
+  It now sends the state it prints and remembers.
+- `--lighting-effect-duration nan` never ended. `--lighting-effect-duration` and `--lighting-effect-period` now
+  refuse NaN and the infinities ("must be a finite number of seconds").
+- `_percent(inf)` in `g6_status` raised `OverflowError`, so a status answer that decoded to infinity ended in a
+  traceback. A non-finite reading is now unknown (`null`).
 
 A port bug found and fixed on the way: clap appended a repeated `--lighting-rgb` (`1 2 3 --lighting-rgb 4 5 6`),
 where argparse keeps the last colour. The argv fixture pins it.
@@ -102,7 +102,7 @@ Formats:
   Python builders store them in: `wLength` `0100` is 1, little-endian. Rust should compare its encoded setup packet
   fields byte for byte.
 - **Fixed conditions** in `writes.json`:
-  - the current output reads as Headphones, so `--toggle-output` switches to Speakers;
+  - the toggle state reads as Speakers set last, so `--toggle-output` switches to Headphones;
   - `--eq-preset` without `--eq-preset-output` uses the Headphones curve;
   - `--dry-run` doesn't change what is recorded: the recorder replaces the device.
 - **Coverage gaps:** `status_live.json` is one device state (output Speakers, Direct mode on, effects off). Add more

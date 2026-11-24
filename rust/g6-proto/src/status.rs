@@ -212,7 +212,7 @@ fn switch(value: Option<f64>) -> Option<bool> {
     value.map(|v| v != 0.0)
 }
 
-/// 0..1 to a percentage. Python raises on an infinite value; here it is unknown.
+/// 0..1 to a percentage; an infinite or NaN reading is unknown, as in Python.
 fn percent(value: Option<f64>) -> Option<i64> {
     value.and_then(|v| py_round_int(v * 100.0))
 }

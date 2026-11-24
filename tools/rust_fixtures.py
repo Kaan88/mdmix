@@ -285,7 +285,7 @@ def _sample(action) -> list[str]:
         return [flag, '1k', '2']
     if flag == '--eq-preset':
         return [flag, 'Rock']
-    if action.type is float:
+    if action.type is float or getattr(action.type, '__name__', '') == '_seconds':
         return [flag, '1.5']
     return [flag, 'x']
 
