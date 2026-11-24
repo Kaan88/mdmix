@@ -59,7 +59,11 @@ from the release build match `python -m g6_cli --status --json` / `--status` byt
 (see below). Nothing was written to the device: no `g6` run without `--dry-run` other than `--status`, and the
 test UI was built but not started.
 
-What wasn't run, on purpose: any write to a G6 (the HID write path and the test UI are unverified on hardware), the
+Writes on the real G6 (2026-11-24, by the user, with `g6-testui`): every control in the test UI worked; the
+read-back after each change matched SBC. One read showed DAC filter and decoder mode as unknown (no answer); the
+next start read them fine.
+
+What wasn't run, on purpose: the
 hardware tests, `tools/export_vectors.py --live`, and Python's `--claim-and-release` and `--reload-audio-services`,
 not even as dry runs. The Rust claim/release/reload paths were written from reading the Python source and are
 unverified.

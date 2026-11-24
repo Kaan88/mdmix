@@ -194,3 +194,8 @@ Answering each needs one read-back test with the user's permission. Until then t
 | What does "Mute mix" (`--mixer-playback-mute`) do, compared with `--playback-mute`? | Both are shown, labelled with their flags |
 | Can an output switch fade inside the write? | No fade; switch at once, as SBC does |
 | How does SBC write the speaker setup? | Read-only control |
+| Does turning an effect on while SBX is off bring SBX back on? | Show what the read-back says |
+
+Answered on the real G6 (2026-11-24, test UI): turning off the last SBX effect makes the G6 turn SBX off itself,
+and SBC shows the same. The SBX switch shows the read-back; this is an expected side effect, not a refusal, so it
+must not spring back or show an error.
