@@ -82,7 +82,8 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             theme: Theme::System,
-            backdrop: Backdrop::Off,
+            // The mockup's default. Where the system shows no backdrop the toolkit falls back to the flat chrome.
+            backdrop: Backdrop::Mica,
             corners: Corners::Round,
             page: Page::Sbx,
             size: None,
@@ -158,6 +159,20 @@ pub const MIN: (u32, u32) = (760, 600);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_backdrop_off_beats_the_default() {
+        assert_eq!(Prefs::default().backdrop, Backdrop::Mica);
+        assert_eq!(
+            Prefs::parse(
+                "[g6-gui]
+backdrop=off
+"
+            )
+            .backdrop,
+            Backdrop::Off
+        );
+    }
 
     #[test]
     fn settings_round_trip() {

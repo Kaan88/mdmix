@@ -246,6 +246,11 @@ impl App {
             scroll: self.scroll,
             maximized: self.maximized,
             hover,
+            pointer: if self.dialog.is_some() {
+                None
+            } else {
+                self.pointer
+            },
             pressed: self.pressed,
             toast: toast.as_deref(),
             frosted: self.frost.key().is_some(),
@@ -266,6 +271,10 @@ impl App {
             })
             .collect();
         self.hits = out.hits;
+        // The page may have moved under a pointer that didn't: its shape follows what is under it now.
+        if let Some((x, y)) = self.pointer {
+            self.update_cursor(x, y);
+        }
         self.max_scroll = out.max_scroll;
         self.view = out.view;
         self.present();
@@ -312,14 +321,22 @@ impl App {
     }
 
     fn pointer_moved(&mut self, x: f32, y: f32) {
-        let before = self.pointer.and_then(|(x, y)| self.hits.at(x, y));
+        let before = self.pointer.and_then(|(x, y)| self.hits.at_rect(x, y));
         self.pointer = Some((x, y));
         let mut changed = false;
         if let Some(f) = &mut self.dialog {
             changed |= f.pointer_move(x, y);
         } else {
-            changed |= before != self.hits.at(x, y);
+            changed |= before != self.hits.at_rect(x, y);
         }
+        self.update_cursor(x, y);
+        if changed {
+            self.redraw();
+        }
+    }
+
+    /// The pointer's shape at (`x`, `y`): a resize edge, not-allowed over a read-only control, or the arrow.
+    fn update_cursor(&self, x: f32, y: f32) {
         if let Some(w) = &self.window {
             let icon = match self.edge(x, y) {
                 Some(ResizeDirection::North | ResizeDirection::South) => CursorIcon::NsResize,
@@ -330,12 +347,12 @@ impl App {
                 Some(ResizeDirection::NorthEast | ResizeDirection::SouthWest) => {
                     CursorIcon::NeswResize
                 }
+                None if self.dialog.is_none() && self.hits.at(x, y) == Some(Hit::Inert) => {
+                    CursorIcon::NotAllowed
+                }
                 None => CursorIcon::Default,
             };
             w.set_cursor(icon);
-        }
-        if changed {
-            self.redraw();
         }
     }
 
@@ -401,6 +418,9 @@ impl App {
     }
 
     fn activate(&mut self, event_loop: &ActiveEventLoop, hit: Hit) {
+        if !hit.acts() {
+            return;
+        }
         match hit {
             Hit::Nav(page) => self.set_page(page),
             Hit::Settings => self.open_dialog(0),
@@ -419,7 +439,7 @@ impl App {
             Hit::Theme(i) => self.apply_setting(dialog::THEME, &Value::Choice(i)),
             Hit::Backdrop(i) => self.apply_setting(dialog::BACKDROP, &Value::Choice(i)),
             Hit::Corners(i) => self.apply_setting(dialog::CORNERS, &Value::Choice(i)),
-            Hit::Drag => {}
+            Hit::Drag | Hit::Inert => {}
         }
         self.redraw();
     }

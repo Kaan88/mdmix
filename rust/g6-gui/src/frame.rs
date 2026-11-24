@@ -11,12 +11,11 @@ use mdshared_ui::glyph;
 use mdshared_ui::overlay::Bubble;
 use mdshared_ui::pane;
 use mdshared_ui::scroll;
-use mdshared_ui::segments;
 use mdshared_ui::settings::pages::Form;
 
 use crate::facts::{self, DASH};
 use crate::icons;
-use crate::kit::{self, Env, Hit, Hits, Tone, dimmed};
+use crate::kit::{self, Env, Hit, Hits, Tone, chrome_pal};
 use crate::model::{Conn, Model, Page};
 use crate::pages;
 use crate::prefs::Prefs;
@@ -36,6 +35,8 @@ pub struct FrameIn<'a> {
     pub scroll: f32,
     pub maximized: bool,
     pub hover: Option<Hit>,
+    /// Where the pointer is, for the tip over a control that is read only.
+    pub pointer: Option<(f32, f32)>,
     pub pressed: Option<Hit>,
     pub toast: Option<&'a str>,
     /// Draw the window's own caption buttons (not in `--shot` of a bare page? always true today).
@@ -53,8 +54,12 @@ pub struct FrameOut {
     pub view: Rect,
 }
 
+pub const READ_ONLY_TIP: &str =
+    "Read only for now: this version shows the G6 and doesn't change it.";
+
 pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -> FrameOut {
     let (w, h) = input.size;
+    let dialog_is_none = dialog.is_none();
     let pal = input.pal;
     let mut env = Env {
         pal,
@@ -90,6 +95,14 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
     if let Some(form) = dialog {
         form.draw(p, &pal, Rect::new(0.0, 0.0, w, h), false);
     }
+    // A device control that does nothing yet says so, under the pointer.
+    if input.pointer.is_some()
+        && dialog_is_none
+        && let Some((x, y)) = input.pointer
+        && let Some((Hit::Inert, r)) = env.hits.at_rect(x, y)
+    {
+        Bubble::tip(p, READ_ONLY_TIP, r, w, h).draw(p, &pal);
+    }
     // The toast is on top of everything, the dialog too.
     if let Some(t) = input.toast {
         Bubble::toast(p, t, main).draw(p, &pal);
@@ -105,7 +118,7 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
 // ---- title row ---------------------------------------------------------------------------------
 
 fn draw_title(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
-    let pal = env.pal;
+    let pal = chrome_pal(&env.pal, input.frosted);
     p.fill(r, pal.title);
     // The mark: a ring with a dot.
     p.rbox(Rect::new(14.0, 12.0, 16.0, 16.0), 8.0, pal.accent);
@@ -183,17 +196,18 @@ fn draw_title(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
 // ---- sidebar -----------------------------------------------------------------------------------
 
 fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
-    let pal = env.pal;
+    let live = env.pal;
+    // Over a backdrop the chrome's secondary text is the full text colour, as in the mockup.
+    let pal = chrome_pal(&live, input.frosted);
     let m = input.model;
-    pane::draw_head(p, &pal, r, "DEVICE");
+    p.fill(r, live.pane);
     let px = p.px().max(1.0);
-    p.fill(Rect::new(r.right() - px, r.y, px, r.h), pal.line);
-    let dim = dimmed(&pal, pal.pane);
+    p.fill(Rect::new(r.right() - px, r.y, px, r.h), live.line);
     let x = r.x + 14.0;
-    let inner = r.w - 28.0;
-    let mut y = r.y + pane::HEAD + 4.0;
+    let inner = r.w - 28.0 - px;
+    let mut y = r.y + 14.0;
 
-    // Name and state.
+    // Name and state: a lamp, the name at 14 px and what the G6 is doing under it.
     let (dot, sub, sub_color) = match &m.conn {
         Conn::Connected => ([0x3f, 0xb9, 0x50], "USB DAC and amp", pal.muted),
         Conn::Reading => (pal.faint, "Reading the G6…", pal.muted),
@@ -204,7 +218,7 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
         Face::Semibold,
         14.0,
         x + 18.0,
-        y + 10.0,
+        y + 9.0,
         "SoundBlaster X G6",
         pal.text,
         inner - 18.0,
@@ -213,24 +227,29 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
         Face::Ui,
         12.0,
         x + 18.0,
-        y + 28.0,
+        y + 27.0,
         sub,
         sub_color,
         inner - 18.0,
     );
-    y += 46.0;
+    y += 36.0 + 10.0;
 
-    // Output.
-    let out_r = Rect::new(x, y, inner, segments::SEGMENT_H);
-    segments::draw_segments(
+    // Output: two equal halves, the one in use in the accent. Read only: inert, in full colour.
+    let out_r = Rect::new(x, y, inner, kit::SEG_H);
+    kit::draw_seg(
         p,
-        &dim,
+        &live,
         out_r,
         &facts::OUTPUTS,
         facts::output_index(&m.status),
         None,
+        kit::SegKind {
+            small: false,
+            fill: true,
+        },
     );
-    y += segments::SEGMENT_H + 10.0;
+    env.hits.add(Hit::Inert, out_r);
+    y += kit::SEG_H + 10.0;
 
     // Master volume: it is Core Audio's, so it is a dash until Windows gives it.
     let master = m.mixer.as_ref().map(|v| v.master);
@@ -238,57 +257,89 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     p.icon(
         if muted { icons::MUTED } else { icons::SPEAKER },
         15.0,
-        x + 8.0,
+        x + 14.0,
         y + 14.0,
-        dim.muted,
+        pal.text,
     );
     let vol = master.and_then(|s| s.volume);
     let reading = vol.map_or(DASH.to_string(), |v| v.to_string());
-    let rw = 36.0;
+    let val_w = 40.0;
+    let track = Rect::new(x + 30.0, y, inner - 30.0 - val_w, 28.0);
     kit::slider(
         p,
-        &dim,
-        Rect::new(x + 24.0, y, inner - 24.0 - rw, 28.0),
+        &live,
+        track,
         vol.map(|v| f32::from(v) / 100.0),
         false,
-        pal.pane,
+        live.pane,
     );
-    p.text_right(Face::Ui, 13.0, x + inner, y + 14.0, &reading, dim.text);
-    y += 38.0;
+    env.hits.add(Hit::Inert, Rect::new(x, y, inner, 28.0));
+    p.text_right(
+        Face::Ui,
+        kit::SIZE_VALUE,
+        x + inner,
+        y + 14.0,
+        &reading,
+        pal.muted,
+    );
+    y += 28.0 + 10.0;
 
-    // Speaker setup: Windows' setting of the output in use. One that isn't stereo, 5.1 or 7.1 is said in the caption
-    // and nothing is chosen.
+    // Speaker setup: Windows' setting of the output in use, on one line with its label. One that isn't stereo, 5.1 or
+    // 7.1 is said in the label and nothing is chosen.
     let layout = m.mixer.as_ref().and_then(|v| v.speaker_layout.as_deref());
     let chosen = m.mixer.as_ref().and_then(|v| v.layout_index());
     let caption = match (layout, chosen) {
         (Some(l), None) => format!("Speaker setup · {l}"),
         _ => "Speaker setup".to_string(),
     };
-    p.text(Face::Semibold, 11.0, x, y + 6.0, &caption, pal.muted, inner);
-    y += 16.0;
-    segments::draw_segments(
+    let sw = kit::seg_width(p, &facts::LAYOUTS, true).ceil();
+    // The label shares the line with the control when it fits beside it; otherwise it has a line above.
+    let beside = p.measure(Face::Ui, 12.0, &caption) <= inner - sw - 8.0;
+    if !beside {
+        p.text(Face::Ui, 12.0, x, y + 8.0, &caption, pal.muted, inner);
+        y += 18.0;
+    }
+    let lay_r = Rect::new(x + inner - sw, y, sw, kit::SEG_H_SM);
+    if beside {
+        p.text(
+            Face::Ui,
+            12.0,
+            x,
+            y + kit::SEG_H_SM / 2.0,
+            &caption,
+            pal.muted,
+            inner - sw - 8.0,
+        );
+    }
+    kit::draw_seg(
         p,
-        &dim,
-        Rect::new(x, y, inner, segments::SEGMENT_H),
+        &live,
+        lay_r,
         &facts::LAYOUTS,
         chosen,
         None,
+        kit::SegKind {
+            small: true,
+            fill: false,
+        },
     );
-    y += segments::SEGMENT_H + 12.0;
+    env.hits.add(Hit::Inert, lay_r);
+    y += kit::SEG_H_SM + 10.0;
 
-    // The pages.
-    for (i, page) in Page::ALL.into_iter().enumerate() {
+    // The pages: 34 high, 2 apart, the current one on the `on` fill with the accent mark.
+    y += 6.0;
+    for page in Page::ALL {
         if page == Page::Chain {
-            y += 6.0;
-            p.fill(Rect::new(r.x + 12.0, y, r.w - 24.0, px), pal.line);
-            y += 7.0;
+            y += 4.0;
+            p.fill(Rect::new(r.x + 8.0, y, r.w - 16.0 - px, px), live.line);
+            y += 5.0;
         }
-        let row = Rect::new(r.x + 6.0, y, r.w - 13.0, NAV_H);
+        let row = Rect::new(r.x + 6.0, y, r.w - 12.0 - px, NAV_H);
         let hit = Hit::Nav(page);
         let selected = page == input.page;
         pane::draw_row_fill(
             p,
-            &pal,
+            &live,
             row,
             env.is_hover(hit),
             env.is_pressed(hit),
@@ -300,7 +351,7 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
             15.0,
             row.x + 24.0,
             row.cy(),
-            if selected { pal.accent } else { ink },
+            if selected { live.accent } else { ink },
         );
         p.text(
             Face::Ui,
@@ -313,7 +364,6 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
         );
         env.hits.add(hit, row);
         y += NAV_H + 2.0;
-        let _ = i;
     }
 }
 
@@ -380,22 +430,63 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
     let hits_from = env.hits.len();
     let x = view.x + PAD;
     let w = (view.w - 2.0 * PAD).max(100.0);
-    let mut y = view.y + 14.0 - input.scroll;
+    let mut y = view.y + 18.0 - input.scroll;
 
-    // Header: the title, what the page is for, and its badges.
+    // Header: the title, what the page is for beside it on the same line when it fits, and the badges at the right
+    // (the mockup's `.phead`: h2 17 px, the description 11.5 px, 12 px apart).
     let page = input.page;
-    p.text(Face::Semibold, 17.0, x, y + 10.0, page.title(), pal.text, w);
-    let mut tag_x = x + w;
+    let cy = y + 2.0 + 11.5;
+    let tw = p.measure(Face::Semibold, kit::SIZE_H2, page.title());
+    p.text(
+        Face::Semibold,
+        kit::SIZE_H2,
+        x,
+        cy,
+        page.title(),
+        pal.text,
+        w,
+    );
     let mut tags = pages::tags(page, input.model);
     tags.push(("Device read only".into(), Tone::Quiet));
-    for (text, tone) in tags.iter().rev() {
-        let bw = (p.measure(Face::Semibold, 10.5, text) + 12.0).ceil();
-        tag_x -= bw;
-        kit::badge(p, &pal, tag_x, y + 10.0, text, *tone);
-        tag_x -= 6.0;
+    let tags_w: f32 = tags
+        .iter()
+        .map(|(t, _)| kit::badge_w(p, t) + 6.0)
+        .sum::<f32>()
+        - 6.0;
+    let mut tag_x = x + w - tags_w;
+    for (text, tone) in &tags {
+        tag_x += kit::badge(p, &pal, tag_x, cy, text, *tone) + 6.0;
     }
-    p.text(Face::Ui, 12.0, x, y + 32.0, page.about(), pal.muted, w);
-    y += 52.0;
+    let about = page.about();
+    let aw = p.measure(Face::Ui, kit::SIZE_SMALL, about);
+    let room = w - tw - 12.0 - tags_w - 12.0;
+    if aw <= room {
+        p.text(
+            Face::Ui,
+            kit::SIZE_SMALL,
+            x + tw + 12.0,
+            cy + 1.5,
+            about,
+            pal.muted,
+            room,
+        );
+        y += 2.0 + 23.0 + 12.0;
+    } else {
+        // Too long for the line: it goes under the title, wrapped.
+        let lines = kit::wrap(p, Face::Ui, kit::SIZE_SMALL, about, w);
+        for (i, l) in lines.iter().enumerate() {
+            p.text(
+                Face::Ui,
+                kit::SIZE_SMALL,
+                x,
+                y + 2.0 + 23.0 + 6.0 + 15.0 * i as f32,
+                l,
+                pal.muted,
+                w,
+            );
+        }
+        y += 2.0 + 23.0 + 6.0 + 15.0 * lines.len() as f32 + 10.0;
+    }
 
     for n in pages::notices(page, input.model) {
         let r = Rect::new(x, y, w, 36.0);
@@ -468,6 +559,7 @@ mod tests {
             scroll,
             maximized: false,
             hover: None,
+            pointer: None,
             pressed: None,
             toast: None,
             frosted: false,
@@ -502,8 +594,11 @@ mod tests {
     #[test]
     fn scrolled_out_controls_do_not_cover_the_title_row_or_the_banner() {
         let size = (760.0, 600.0);
-        for sample in [Sample::Live, Sample::Away] {
-            let (_, top) = render(Page::Settings, sample, LIGHT, size);
+        for (page, sample) in [Page::Settings, Page::Mixer, Page::Playback]
+            .into_iter()
+            .flat_map(|pg| [Sample::Live, Sample::Away].map(move |s| (pg, s)))
+        {
+            let (_, top) = render(page, sample, LIGHT, size);
             assert!(
                 top.max_scroll > 100.0,
                 "the page has to scroll for this test"
@@ -512,7 +607,7 @@ mod tests {
             let mut s = 0.0;
             // Past the end too: the window clamps the scroll, the frame must not depend on it.
             while s <= top.max_scroll + 700.0 {
-                let (_, out) = render_at(Page::Settings, sample, LIGHT, size, s);
+                let (_, out) = render_at(page, sample, LIGHT, size, s);
                 // The title row, left of the window buttons.
                 for x in (250..570).step_by(10) {
                     assert_eq!(
@@ -533,11 +628,8 @@ mod tests {
                     for x in (retry.x as i32..retry.right() as i32 - 60).step_by(10) {
                         let hit = out.hits.at(x as f32, retry.cy());
                         assert!(
-                            !matches!(
-                                hit,
-                                Some(Hit::Theme(_) | Hit::Backdrop(_) | Hit::Corners(_))
-                            ),
-                            "x {x}, scroll {s}: {hit:?}"
+                            matches!(hit, None | Some(Hit::Retry)),
+                            "{page:?} x {x}, scroll {s}: {hit:?}"
                         );
                     }
                 }
@@ -545,6 +637,59 @@ mod tests {
             }
             assert!(at_title > 0);
         }
+    }
+
+    #[test]
+    fn a_read_only_control_is_inert_and_a_click_on_it_does_nothing() {
+        let (_, out) = render(Page::Playback, Sample::Live, LIGHT, (1100.0, 720.0));
+        assert!(!Hit::Inert.acts() && !Hit::Drag.acts());
+        assert!(Hit::Retry.acts() && Hit::Nav(Page::Sbx).acts() && Hit::Theme(0).acts());
+        // The controls of the page are there to be found, as inert regions.
+        let found = (0..1100).step_by(6).any(|x| {
+            (60..720)
+                .step_by(6)
+                .any(|y| matches!(out.hits.at(x as f32, y as f32), Some(Hit::Inert)))
+        });
+        assert!(found);
+    }
+
+    /// The pixels of a Playback frame with the pointer at `at`, with or without the settings dialog open.
+    fn frame_pixels(at: Option<(f32, f32)>, dialog: bool) -> Vec<u8> {
+        let model = Sample::Live.model();
+        let prefs = Prefs::default();
+        let size = (1100.0, 720.0);
+        let mut bmp = Bitmap::new(1100, 720);
+        let mut gfx = Gfx::new();
+        let mut form = dialog.then(|| crate::dialog::form_at(&prefs, &model, 0));
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let input = FrameIn {
+            model: &model,
+            prefs: &prefs,
+            pal: LIGHT,
+            page: Page::Playback,
+            size,
+            scroll: 0.0,
+            maximized: false,
+            hover: None,
+            pointer: at,
+            pressed: None,
+            toast: None,
+            frosted: false,
+        };
+        draw_frame(&mut p, &input, form.as_mut());
+        bmp.pixels
+    }
+
+    #[test]
+    fn the_read_only_tip_shows_over_a_control_and_never_over_the_dialog() {
+        let (_, out) = render(Page::Playback, Sample::Live, LIGHT, (1100.0, 720.0));
+        let at = (0..1100)
+            .step_by(4)
+            .flat_map(|x| (60..720).step_by(4).map(move |y| (x as f32, y as f32)))
+            .find(|&(x, y)| matches!(out.hits.at(x, y), Some(Hit::Inert)))
+            .expect("an inert control");
+        assert_ne!(frame_pixels(Some(at), false), frame_pixels(None, false));
+        assert_eq!(frame_pixels(Some(at), true), frame_pixels(None, true));
     }
 
     #[test]
