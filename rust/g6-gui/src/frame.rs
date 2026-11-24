@@ -3,17 +3,21 @@
 //! The frame is drawn whole every time, into the painter it is given, in logical px. The title row and the sidebar
 //! are the chrome that a backdrop shows through: after each is drawn it is marked for [`mdshared_ui::frost`], and
 //! the areas come back in [`FrameOut`].
+//!
+//! What moves is asked of the animator in [`Fx`] while it is drawn (see `doc/gui-plan.md`, "Motion"). A frame drawn
+//! with [`Fx::still`] has nothing in flight and is the picture at rest.
 
+use mdshared_ui::anim::{Id, fluent, pop};
 use mdshared_ui::chrome::{self, TITLE_H, WinButton};
 use mdshared_ui::frost;
 use mdshared_ui::gfx::{Face, Painter, Rect, mix};
 use mdshared_ui::glyph;
 use mdshared_ui::overlay::Bubble;
-use mdshared_ui::pane;
 use mdshared_ui::scroll;
 use mdshared_ui::settings::pages::Form;
 
 use crate::facts::{self, DASH};
+use crate::fx::Fx;
 use crate::icons;
 use crate::kit::{self, Env, Hit, Hits, Tone, chrome_pal};
 use crate::model::{Conn, Model, Page};
@@ -38,7 +42,6 @@ pub struct FrameIn<'a> {
     /// Where the pointer is, for the tip over a control that is read only.
     pub pointer: Option<(f32, f32)>,
     pub pressed: Option<Hit>,
-    pub toast: Option<&'a str>,
     /// Draw the window's own caption buttons (not in `--shot` of a bare page? always true today).
     pub frosted: bool,
 }
@@ -57,17 +60,23 @@ pub struct FrameOut {
 pub const READ_ONLY_TIP: &str =
     "Read only for now: this version shows the G6 and doesn't change it.";
 
-pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -> FrameOut {
+pub fn draw_frame(
+    p: &mut Painter,
+    input: &FrameIn,
+    dialog: Option<&mut Form>,
+    fx: &mut Fx,
+) -> FrameOut {
     let (w, h) = input.size;
     let dialog_is_none = dialog.is_none();
     let pal = input.pal;
-    let mut env = Env {
-        pal,
-        model: input.model,
-        hits: Hits::default(),
-        hover: input.hover,
-        pressed: input.pressed,
-    };
+    let Fx {
+        anim,
+        page,
+        toast,
+        leaving,
+        tip,
+    } = fx;
+    let mut env = Env::new(pal, input.model, input.hover, input.pressed, anim);
     p.fill(Rect::new(0.0, 0.0, w, h), pal.page);
 
     let title = Rect::new(0.0, 0.0, w, TITLE_H);
@@ -78,6 +87,8 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
         (h - TITLE_H).max(0.0),
     );
     let (view, max_scroll) = draw_main(p, &mut env, input, main);
+    // A page switch blends the old page into the area of the page, over what it drew and under everything else.
+    page.apply(env.anim, p, view);
 
     let side = Rect::new(0.0, TITLE_H, SIDE_W, (h - TITLE_H).max(0.0));
     draw_sidebar(p, &mut env, input, side);
@@ -92,20 +103,48 @@ pub fn draw_frame(p: &mut Painter, input: &FrameIn, dialog: Option<&mut Form>) -
         frost::mark(p.bmp, p.dev_rect(title));
     }
 
-    if let Some(form) = dialog {
-        form.draw(p, &pal, Rect::new(0.0, 0.0, w, h), false);
+    // The dialog: it comes in over the window and goes out the same way, as one picture. (The toolkit's form draws
+    // its own dimming, so the whole window's worth fades and nothing rises: a shifted dimming would leave a strip.)
+    let shown = dialog.is_some();
+    if shown {
+        *leaving = None;
     }
-    // A device control that does nothing yet says so, under the pointer.
-    if input.pointer.is_some()
-        && dialog_is_none
-        && let Some((x, y)) = input.pointer
-        && let Some((Hit::Inert, r)) = env.hits.at_rect(x, y)
-    {
-        Bubble::tip(p, READ_ONLY_TIP, r, w, h).draw(p, &pal);
+    if let Some(form) = dialog.or(leaving.as_mut()) {
+        let t = env
+            .anim
+            .presence("dialog", shown, fluent::ENTER, fluent::EXIT);
+        let window = Rect::new(0.0, 0.0, w, h);
+        pop(p, window, t, (0.0, 0.0), |p| {
+            form.draw(p, &pal, window, false)
+        });
+        if !shown && t <= 0.0 {
+            *leaving = None;
+        }
+    }
+    // A device control that does nothing yet says so, under the pointer; the tip fades in and out.
+    let over = input
+        .pointer
+        .filter(|_| dialog_is_none && leaving.is_none())
+        .and_then(|(x, y)| match env.hits.at_rect(x, y) {
+            Some((Hit::Inert, r)) => Some(r),
+            _ => None,
+        });
+    if over.is_some() {
+        *tip = over;
+    }
+    if let Some(anchor) = *tip {
+        let t = env
+            .anim
+            .presence("tip", over.is_some(), fluent::ENTER, fluent::FADE);
+        if t > 0.0 {
+            Bubble::tip(p, READ_ONLY_TIP, anchor, w, h).draw_presence(p, &pal, t);
+        } else if over.is_none() {
+            *tip = None;
+        }
     }
     // The toast is on top of everything, the dialog too.
-    if let Some(t) = input.toast {
-        Bubble::toast(p, t, main).draw(p, &pal);
+    if let Some((text, t)) = toast.frame(env.anim, "toast") {
+        Bubble::toast(p, text, main).draw_presence(p, &pal, t);
     }
     FrameOut {
         hits: env.hits,
@@ -166,31 +205,66 @@ fn draw_title(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
         (2, WinButton::Min, Hit::Min),
     ] {
         let b = chrome::win_button_rect(r.right(), n);
-        chrome::draw_win_button(
-            p,
-            &pal,
-            kind,
-            b,
-            input.maximized,
-            env.is_hover(hit),
-            env.is_pressed(hit),
-        );
+        caption_button(p, env, &pal, kind, b, hit, input.maximized);
         env.hits.add(hit, b);
     }
     // The settings button, left of them.
     let b = Rect::new(r.right() - 3.0 * chrome::WIN_BTN_W - 38.0, 5.0, 32.0, 30.0);
-    let open = false;
-    if let Some(fill) = chrome::button_fill(
-        &pal,
-        env.is_hover(Hit::Settings),
-        env.is_pressed(Hit::Settings),
-        false,
-        open,
-    ) {
-        p.rbox(b, 6.0, fill);
+    let hot = env.fade(("hover", Hit::Settings), env.is_hover(Hit::Settings));
+    let pressed = env.is_pressed(Hit::Settings) && env.is_hover(Hit::Settings);
+    if let Some(fill) = chrome::button_fill(&pal, true, pressed, false, false) {
+        fill_fade(p, b, 6.0, fill, hot);
     }
     p.icon(icons::SLIDERS, 15.0, b.cx(), b.cy(), pal.text);
     env.hits.add(Hit::Settings, b);
+}
+
+/// A rounded box at `alpha` of its colour; at 1 it is the plain box and at 0 nothing.
+fn fill_fade(p: &mut Painter, r: Rect, radius: f32, c: mdshared_ui::gfx::Rgb, alpha: f32) {
+    if alpha >= 1.0 {
+        p.rbox(r, radius, c);
+    } else if alpha > 0.0 {
+        p.rbox_a(r, radius, c, alpha);
+    }
+}
+
+/// One of the window's caption buttons, as `chrome::draw_win_button` draws it but with the hover fading in and out
+/// (83 ms). The close button's red and its white glyph fade together.
+fn caption_button(
+    p: &mut Painter,
+    env: &mut Env,
+    pal: &mdshared_ui::theme::Palette,
+    kind: WinButton,
+    b: Rect,
+    hit: Hit,
+    maximized: bool,
+) {
+    let g = match kind {
+        WinButton::Close => glyph::WIN_CLOSE,
+        WinButton::Max if maximized => glyph::WIN_RESTORE,
+        WinButton::Max => glyph::WIN_MAX,
+        WinButton::Min => glyph::WIN_MIN,
+    };
+    let hot = env.fade(("hover", hit), env.is_hover(hit));
+    let pressed = env.is_pressed(hit) && env.is_hover(hit);
+    let mut ink = pal.text;
+    if hot > 0.0 {
+        let fill = match kind {
+            WinButton::Close if pressed => mix(pal.danger, [0, 0, 0], 0.15),
+            WinButton::Close => pal.danger,
+            _ if pressed => pal.press,
+            _ => pal.hover,
+        };
+        if hot >= 1.0 {
+            p.fill(b, fill);
+        } else {
+            p.fill_a(b, fill, hot);
+        }
+        if kind == WinButton::Close {
+            ink = mix(pal.text, [255, 255, 255], hot);
+        }
+    }
+    p.icon(g, 10.0, b.cx(), b.cy(), ink);
 }
 
 // ---- sidebar -----------------------------------------------------------------------------------
@@ -236,9 +310,10 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
 
     // Output: two equal halves, the one in use in the accent. Read only: inert, in full colour.
     let out_r = Rect::new(x, y, inner, kit::SEG_H);
-    kit::draw_seg(
+    kit::draw_seg_with(
         p,
         &live,
+        Some((&mut *env.anim, Id::new("side-output"))),
         out_r,
         &facts::OUTPUTS,
         facts::output_index(&m.status),
@@ -265,14 +340,11 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     let reading = vol.map_or(DASH.to_string(), |v| v.to_string());
     let val_w = 40.0;
     let track = Rect::new(x + 30.0, y, inner - 30.0 - val_w, 28.0);
-    kit::slider(
-        p,
-        &live,
-        track,
-        vol.map(|v| f32::from(v) / 100.0),
-        false,
-        live.pane,
-    );
+    let frac = vol.map(|v| {
+        env.anim
+            .value("side-volume", f32::from(v) / 100.0, fluent::MOVE)
+    });
+    kit::slider(p, &live, track, frac, false, live.pane);
     env.hits.add(Hit::Inert, Rect::new(x, y, inner, 28.0));
     p.text_right(
         Face::Ui,
@@ -311,9 +383,10 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
             inner - sw - 8.0,
         );
     }
-    kit::draw_seg(
+    kit::draw_seg_with(
         p,
         &live,
+        Some((&mut *env.anim, Id::new("side-layout"))),
         lay_r,
         &facts::LAYOUTS,
         chosen,
@@ -326,32 +399,52 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     env.hits.add(Hit::Inert, lay_r);
     y += kit::SEG_H_SM + 10.0;
 
-    // The pages: 34 high, 2 apart, the current one on the `on` fill with the accent mark.
+    // The pages: 34 high, 2 apart, the current one on the `on` fill with the accent mark. The mark and its fill slide
+    // from the page that was current to the one that is (167 ms), kept relative to the list so a sidebar that
+    // reflows (the speaker caption wrapping) does not set them sliding; hover fades in and out (83 ms).
     y += 6.0;
+    let list_top = y;
+    let mut rows = Vec::new();
     for page in Page::ALL {
         if page == Page::Chain {
             y += 4.0;
             p.fill(Rect::new(r.x + 8.0, y, r.w - 16.0 - px, px), live.line);
             y += 5.0;
         }
-        let row = Rect::new(r.x + 6.0, y, r.w - 12.0 - px, NAV_H);
+        rows.push((page, Rect::new(r.x + 6.0, y, r.w - 12.0 - px, NAV_H)));
+        y += NAV_H + 2.0;
+    }
+    for &(page, row) in &rows {
         let hit = Hit::Nav(page);
         let selected = page == input.page;
-        pane::draw_row_fill(
-            p,
-            &live,
-            row,
-            env.is_hover(hit),
-            env.is_pressed(hit),
-            selected,
+        let hot = env.fade(("nav-hover", page), env.is_hover(hit) && !selected);
+        let fill = if env.is_pressed(hit) {
+            live.press
+        } else {
+            live.hover
+        };
+        fill_fade(p, row, 5.0, fill, hot);
+    }
+    if let Some(&(_, row)) = rows.iter().find(|(pg, _)| *pg == input.page) {
+        let rel = Rect::new(row.x - r.x, row.y - list_top, row.w, row.h);
+        let at = env.anim.value("nav-selected", rel, fluent::MOVE);
+        let at = Rect::new(r.x + at.x, list_top + at.y, at.w, at.h);
+        p.rbox(at, 5.0, live.on);
+        p.rbox(
+            Rect::new(at.x, at.y + 7.0, 3.0, at.h - 14.0),
+            1.5,
+            live.accent,
         );
-        let ink = if selected { pal.text } else { pal.muted };
+    }
+    for (page, row) in rows {
+        let hit = Hit::Nav(page);
+        let lit = env.fade(("nav-ink", page), page == input.page);
         p.icon(
             page.icon(),
             15.0,
             row.x + 24.0,
             row.cy(),
-            if selected { live.accent } else { ink },
+            mix(pal.muted, live.accent, lit),
         );
         p.text(
             Face::Ui,
@@ -359,11 +452,10 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
             row.x + 42.0,
             row.cy(),
             page.title(),
-            ink,
+            mix(pal.muted, pal.text, lit),
             row.w - 52.0,
         );
         env.hits.add(hit, row);
-        y += NAV_H + 2.0;
     }
 }
 
@@ -413,14 +505,7 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
                 pal.warn,
                 b.x - r.x - 52.0,
             );
-            kit::button(
-                p,
-                &pal,
-                b,
-                "Retry",
-                env.is_hover(Hit::Retry),
-                env.is_pressed(Hit::Retry),
-            );
+            env.button(p, &pal, b, "Retry", Hit::Retry);
             env.hits.add(Hit::Retry, b);
             top = r.bottom() + 4.0;
         }
@@ -502,6 +587,7 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
     }
 
     let start = y;
+    env.begin_scope(page);
     let used = if page == Page::Chain {
         pages::draw_chain(p, env, Rect::new(x, y, w, 0.0))
     } else {
@@ -561,10 +647,9 @@ mod tests {
             hover: None,
             pointer: None,
             pressed: None,
-            toast: None,
             frosted: false,
         };
-        let out = draw_frame(&mut p, &input, None);
+        let out = draw_frame(&mut p, &input, None, &mut Fx::still());
         (bmp, out)
     }
 
@@ -673,10 +758,9 @@ mod tests {
             hover: None,
             pointer: at,
             pressed: None,
-            toast: None,
             frosted: false,
         };
-        draw_frame(&mut p, &input, form.as_mut());
+        draw_frame(&mut p, &input, form.as_mut(), &mut Fx::still());
         bmp.pixels
     }
 
@@ -710,5 +794,222 @@ mod tests {
         assert_eq!(at(5, 700), LIGHT.pane);
         assert_eq!(at(1090, 700), LIGHT.page);
         assert_eq!(at(500, 5), LIGHT.title);
+    }
+
+    // ---- motion, on a clock moved by hand ----
+
+    use mdshared_ui::anim::{Clock, ManualClock};
+    use std::time::Instant;
+
+    /// A window drawn frame by frame on a clock that stands still until it is moved.
+    struct Rig {
+        bmp: Bitmap,
+        gfx: Gfx,
+        fx: Fx,
+        clock: ManualClock,
+        model: crate::model::Model,
+        prefs: Prefs,
+        view: Rect,
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            Rig {
+                bmp: Bitmap::new(1100, 720),
+                gfx: Gfx::new(),
+                fx: Fx::new(),
+                clock: ManualClock::new(),
+                model: Sample::Live.model(),
+                prefs: Prefs::default(),
+                view: Rect::default(),
+            }
+        }
+
+        /// A frame `ms` after the last, with the pointer's hover at `hover`; what `end_frame` asks for.
+        fn frame(
+            &mut self,
+            page: Page,
+            ms: u64,
+            hover: Option<Hit>,
+        ) -> (Option<Instant>, FrameOut) {
+            self.clock.advance_ms(ms);
+            self.fx.anim.begin_frame(self.clock.now());
+            let input = FrameIn {
+                model: &self.model,
+                prefs: &self.prefs,
+                pal: LIGHT,
+                page,
+                size: (1100.0, 720.0),
+                scroll: 0.0,
+                maximized: false,
+                hover,
+                pointer: None,
+                pressed: None,
+                frosted: false,
+            };
+            let mut p = Painter::new(&mut self.bmp, &mut self.gfx, 1.0);
+            let out = draw_frame(&mut p, &input, None, &mut self.fx);
+            self.view = out.view;
+            (self.fx.anim.end_frame(), out)
+        }
+
+        /// What the window does when a page is clicked: the picture of the old one is kept, then the page changes.
+        fn switch(&mut self) {
+            let p = Painter::new(&mut self.bmp, &mut self.gfx, 1.0);
+            self.fx.begin_page(&p, self.view);
+        }
+
+        /// Frames until nothing is asked for; how many it took.
+        fn settle(&mut self, page: Page) -> usize {
+            for n in 1..200 {
+                if self.frame(page, 16, None).0.is_none() {
+                    return n;
+                }
+            }
+            panic!("it never settles");
+        }
+    }
+
+    #[test]
+    fn a_window_at_rest_asks_for_no_frame_however_long_it_sleeps() {
+        let mut rig = Rig::new();
+        assert!(rig.frame(Page::Sbx, 0, None).0.is_none());
+        assert!(rig.frame(Page::Sbx, 3_600_000, None).0.is_none());
+        assert!(!rig.fx.anim.animating());
+        assert!(!rig.fx.page.running());
+    }
+
+    #[test]
+    fn a_page_switch_draws_frames_then_settles_on_the_page_at_rest() {
+        let mut rig = Rig::new();
+        rig.frame(Page::Sbx, 0, None);
+        let old = rig.bmp.pixels.clone();
+        rig.switch();
+        assert!(rig.fx.page.running());
+        // The frame that draws the new page after the switch already blends the old one in.
+        let (more, _) = rig.frame(Page::Playback, 16, None);
+        assert!(more.is_some());
+        let first = rig.bmp.pixels.clone();
+        let (more, _) = rig.frame(Page::Playback, 80, None);
+        assert!(more.is_some());
+        assert_ne!(rig.bmp.pixels, first);
+        assert_ne!(rig.bmp.pixels, old);
+        let frames = rig.settle(Page::Playback);
+        assert!((4..=40).contains(&frames), "{frames} frames");
+        assert!(!rig.fx.page.running());
+        // Settled, the window is exactly the page drawn with nothing in flight.
+        let mut still = Rig::new();
+        still.fx = Fx::still();
+        still.frame(Page::Playback, 0, None);
+        assert_eq!(rig.bmp.pixels, still.bmp.pixels);
+    }
+
+    #[test]
+    fn clicking_through_the_pages_quickly_never_stops_halfway() {
+        let mut rig = Rig::new();
+        rig.frame(Page::Sbx, 0, None);
+        let mut page = Page::Sbx;
+        for next in [
+            Page::Equalizer,
+            Page::Playback,
+            Page::Mixer,
+            Page::Sbx,
+            Page::Lighting,
+        ] {
+            rig.switch();
+            page = next;
+            // A few frames of the one switch, then the next click arrives while it still runs.
+            for _ in 0..3 {
+                rig.frame(page, 16, None);
+            }
+            assert!(rig.fx.page.running());
+        }
+        rig.settle(page);
+        assert!(!rig.fx.page.running());
+        let mut still = Rig::new();
+        still.fx = Fx::still();
+        still.frame(page, 0, None);
+        assert_eq!(rig.bmp.pixels, still.bmp.pixels);
+    }
+
+    /// The selected row's place in the animator: y relative to the list.
+    fn highlight_y(rig: &Rig) -> f32 {
+        rig.fx.anim.get::<Rect>("nav-selected").expect("drawn").y
+    }
+
+    #[test]
+    fn the_nav_highlight_moves_down_to_its_row_without_going_back() {
+        let mut rig = Rig::new();
+        rig.frame(Page::Sbx, 0, None);
+        let from = highlight_y(&rig);
+        rig.frame(Page::Playback, 16, None);
+        let mut ys = vec![from, highlight_y(&rig)];
+        for _ in 0..40 {
+            if rig.frame(Page::Playback, 16, None).0.is_none() {
+                break;
+            }
+            ys.push(highlight_y(&rig));
+        }
+        ys.push(highlight_y(&rig));
+        let to = *ys.last().unwrap();
+        assert!(to > from + 30.0, "{from} -> {to}");
+        assert!(ys.windows(2).all(|w| w[1] >= w[0] - 1e-3), "{ys:?}");
+        assert!(ys.iter().any(|&y| y > from + 1.0 && y < to - 1.0), "{ys:?}");
+        // It ends on the row the page's own frame puts it on.
+        let (_, out) = rig.frame(Page::Playback, 16, None);
+        let row = out.hits.rect_of(Hit::Nav(Page::Playback)).unwrap();
+        let first = out.hits.rect_of(Hit::Nav(Page::Sbx)).unwrap();
+        assert!((to - (row.y - first.y)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn reduced_motion_makes_a_switch_and_the_highlight_land_at_once() {
+        let mut rig = Rig::new();
+        rig.fx.anim.set_system_reduced(true);
+        rig.frame(Page::Sbx, 0, None);
+        rig.switch();
+        assert!(!rig.fx.page.running());
+        let (more, out) = rig.frame(Page::Mixer, 16, Some(Hit::Nav(Page::Equalizer)));
+        assert!(more.is_none());
+        let row = out.hits.rect_of(Hit::Nav(Page::Mixer)).unwrap();
+        let first = out.hits.rect_of(Hit::Nav(Page::Sbx)).unwrap();
+        assert!((highlight_y(&rig) - (row.y - first.y)).abs() < 1e-3);
+        // And the same picture as a window that never animates.
+        let mut still = Rig::new();
+        still.fx = Fx::still();
+        still.frame(Page::Mixer, 0, Some(Hit::Nav(Page::Equalizer)));
+        assert_eq!(rig.bmp.pixels, still.bmp.pixels);
+    }
+
+    #[test]
+    fn hovering_a_nav_row_fades_in_and_the_toast_rises_and_goes() {
+        let mut rig = Rig::new();
+        rig.frame(Page::Sbx, 0, None);
+        let rest = rig.bmp.pixels.clone();
+        rig.frame(Page::Sbx, 16, Some(Hit::Nav(Page::Mixer)));
+        let (more, _) = rig.frame(Page::Sbx, 32, Some(Hit::Nav(Page::Mixer)));
+        assert!(more.is_some());
+        let mid = rig.bmp.pixels.clone();
+        assert_ne!(mid, rest);
+        rig.settle(Page::Sbx);
+        assert_ne!(rig.bmp.pixels, mid);
+        // The toast: in over 167 ms, out over 167 ms, then nothing to wait for.
+        rig.fx.toast.show("Status read from the G6.".into());
+        assert!(
+            rig.frame(Page::Sbx, 16, Some(Hit::Nav(Page::Mixer)))
+                .0
+                .is_some()
+        );
+        rig.settle(Page::Sbx);
+        let shown = rig.bmp.pixels.clone();
+        rig.fx.toast.hide();
+        assert!(
+            rig.frame(Page::Sbx, 16, Some(Hit::Nav(Page::Mixer)))
+                .0
+                .is_some()
+        );
+        rig.settle(Page::Sbx);
+        assert_ne!(rig.bmp.pixels, shown);
+        assert!(rig.fx.toast.alive().is_none());
     }
 }

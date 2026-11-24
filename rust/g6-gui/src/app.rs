@@ -1,6 +1,10 @@
 //! The window: winit for the window and its events, softbuffer for the pixels, mdshared-ui for everything drawn.
 //! The loop is this app's own, as mdview's and mdedit's are; the shared frame isn't built yet.
 //!
+//! Motion: a frame is drawn between `Animator::begin_frame` and `end_frame`; the deadline `end_frame` gives (the toast's
+//! timer included, through `wake_at`) is what the loop waits for, and with nothing moving it waits for an event, as
+//! before. See `doc/gui-plan.md`, "Motion".
+//!
 //! Reading only. The one thing this window sends to the G6 is what the worker's status read sends.
 
 use std::num::NonZeroU32;
@@ -8,16 +12,18 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use mdshared_text::Bitmap;
+use mdshared_ui::anim::{Clock, SystemClock};
 use mdshared_ui::frost::{self, Frost};
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
 use mdshared_ui::keys::{self, Mods};
 use mdshared_ui::platform;
+use mdshared_ui::scroll::SmoothScroll;
 use mdshared_ui::settings::pages::Form;
 use mdshared_ui::settings::{Outcome, Value};
 use mdshared_ui::window;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
@@ -27,6 +33,7 @@ use mdshared_ui::corners::Corners;
 
 use crate::dialog;
 use crate::frame::{FrameIn, FrameOut, draw_frame};
+use crate::fx::Fx;
 use crate::kit::{Hit, Hits};
 use crate::model::{Conn, Model, Page};
 use crate::prefs::{self, Prefs, Theme};
@@ -83,7 +90,8 @@ struct App {
     focused: bool,
     system_dark: bool,
     page: Page,
-    scroll: f32,
+    /// The page's scroll: the wheel and the keys move a target, the drawing follows it.
+    scroll: SmoothScroll,
     max_scroll: f32,
     view: Rect,
     hits: Hits,
@@ -92,7 +100,13 @@ struct App {
     mods: Mods,
     last_click: Option<(Instant, (f32, f32), u8)>,
     dialog: Option<Form>,
-    toast: Option<(String, Instant)>,
+    /// Motion: the animator and what is kept while it leaves (the toast's text, the closed dialog).
+    fx: Fx,
+    clock: SystemClock,
+    /// When the toast goes away; its fade-out follows.
+    toast_until: Option<Instant>,
+    /// When the next frame is due, as the last one said: `None` is "sleep until an event".
+    deadline: Option<Instant>,
     drawn_once: bool,
 }
 
@@ -113,7 +127,7 @@ impl App {
             maximized: false,
             focused: true,
             system_dark: platform::system_is_dark(),
-            scroll: 0.0,
+            scroll: SmoothScroll::new(),
             max_scroll: 0.0,
             view: Rect::default(),
             hits: Hits::default(),
@@ -122,7 +136,10 @@ impl App {
             mods: Mods::default(),
             last_click: None,
             dialog: None,
-            toast: None,
+            fx: Fx::new(),
+            clock: SystemClock,
+            toast_until: None,
+            deadline: None,
             drawn_once: false,
         }
     }
@@ -145,7 +162,13 @@ impl App {
     }
 
     fn say(&mut self, text: impl Into<String>) {
-        self.toast = Some((text.into(), Instant::now() + TOAST_FOR));
+        self.fx.toast.show(text.into());
+        self.toast_until = Some(Instant::now() + TOAST_FOR);
+    }
+
+    /// Reads the system's wish for less motion: at start, and when the settings may have changed.
+    fn sync_motion(&mut self) {
+        self.fx.anim.set_system_reduced(platform::motion_reduced());
     }
 
     /// Asks the worker for a status read. `user` says a person asked, so the result is announced.
@@ -210,8 +233,13 @@ impl App {
 
     fn set_page(&mut self, page: Page) {
         if page != self.page {
+            // The bitmap still holds the old page: the transition keeps a picture of its area before the next frame
+            // draws the new one. A switch begun while one runs starts from what is on screen.
+            let p = Painter::new(&mut self.bmp, &mut self.gfx, self.scale);
+            self.fx.begin_page(&p, self.view);
             self.page = page;
-            self.scroll = 0.0;
+            let (content, view) = (self.max_scroll + self.view.h, self.view.h);
+            self.scroll.jump_to(0.0, content, view);
             self.prefs.page = page;
             self.prefs.save();
         }
@@ -228,10 +256,14 @@ impl App {
         if (self.bmp.width, self.bmp.height) != (w, h) {
             self.bmp = Bitmap::new(w, h);
         }
+        self.fx.anim.begin_frame(self.clock.now());
         let pal = self.pal();
         let logical = self.logical();
-        self.scroll = self.scroll.clamp(0.0, self.max_scroll.max(0.0));
-        let toast = self.toast.as_ref().map(|(t, _)| t.clone());
+        let (content, view) = (self.max_scroll + self.view.h, self.view.h);
+        let scroll = self
+            .scroll
+            .offset(&mut self.fx.anim, "scroll", content, view)
+            .round();
         let hover = if self.dialog.is_some() {
             None
         } else {
@@ -243,7 +275,7 @@ impl App {
             pal,
             page: self.page,
             size: logical,
-            scroll: self.scroll,
+            scroll,
             maximized: self.maximized,
             hover,
             pointer: if self.dialog.is_some() {
@@ -252,11 +284,10 @@ impl App {
                 self.pointer
             },
             pressed: self.pressed,
-            toast: toast.as_deref(),
             frosted: self.frost.key().is_some(),
         };
         let mut p = Painter::new(&mut self.bmp, &mut self.gfx, self.scale);
-        let out: FrameOut = draw_frame(&mut p, &input, self.dialog.as_mut());
+        let out: FrameOut = draw_frame(&mut p, &input, self.dialog.as_mut(), &mut self.fx);
         self.frost.areas = out
             .chrome
             .iter()
@@ -282,6 +313,11 @@ impl App {
             self.drawn_once = true;
             window.set_visible(true);
         }
+        // The toast's timer rides on the animator's deadline: one wake-up serves both.
+        if let Some(until) = self.toast_until {
+            self.fx.anim.wake_at(until);
+        }
+        self.deadline = self.fx.anim.end_frame();
     }
 
     fn present(&mut self) {
@@ -453,7 +489,8 @@ impl App {
         match out {
             Outcome::Changed { id, value } => self.apply_setting(id, &value),
             Outcome::Action(id) if id == dialog::READ => self.ask_read(true),
-            Outcome::Closed => self.dialog = None,
+            // The closed form is kept while it fades out.
+            Outcome::Closed => self.fx.leaving = self.dialog.take(),
             Outcome::None | Outcome::Unused | Outcome::Redraw | Outcome::Action(_) => {}
         }
         let _ = event_loop;
@@ -496,10 +533,10 @@ impl App {
         event_loop.exit();
     }
 
+    /// The wheel and the keys: the target moves, the page glides to it.
     fn scroll_by(&mut self, dy: f32) {
-        let old = self.scroll;
-        self.scroll = (self.scroll - dy).clamp(0.0, self.max_scroll.max(0.0));
-        if self.scroll != old {
+        let (content, view) = (self.max_scroll + self.view.h, self.view.h);
+        if self.scroll.scroll_by(-dy, content, view) {
             self.redraw();
         }
     }
@@ -590,7 +627,18 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         }
+        // Frames come as fast as the screen shows them while something moves.
+        if let Some(mhz) = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .filter(|mhz| (24_000..=500_000).contains(mhz))
+        {
+            self.fx
+                .anim
+                .set_frame_interval(Duration::from_nanos(1_000_000_000_000 / u64::from(mhz)));
+        }
         self.window = Some(window);
+        self.sync_motion();
         self.sync_style();
         self.sync_frost();
         self.draw();
@@ -623,12 +671,16 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ThemeChanged(t) => {
                 self.system_dark = t == winit::window::Theme::Dark;
+                self.sync_motion();
                 self.sync_style();
                 self.sync_frost();
                 self.redraw();
             }
             WindowEvent::Focused(f) => {
                 self.focused = f;
+                if f {
+                    self.sync_motion();
+                }
                 self.sync_frost();
                 self.redraw();
             }
@@ -673,14 +725,25 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
+    /// The wait for a frame ended: draw it.
+    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+        if let StartCause::ResumeTimeReached { .. } = cause {
+            self.redraw();
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        match &self.toast {
-            Some((_, until)) if Instant::now() >= *until => {
-                self.toast = None;
-                self.redraw();
-                event_loop.set_control_flow(ControlFlow::Wait);
-            }
-            Some((_, until)) => event_loop.set_control_flow(ControlFlow::WaitUntil(*until)),
+        // The toast's time is up: let it go, and its exit plays from the next frame.
+        if let Some(until) = self.toast_until
+            && Instant::now() >= until
+        {
+            self.toast_until = None;
+            self.fx.toast.hide();
+            self.redraw();
+        }
+        // Something moving or a timer: wake for it. Nothing: sleep until an event, using no CPU.
+        match self.deadline {
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }

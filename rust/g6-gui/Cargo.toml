@@ -1,7 +1,7 @@
 [package]
 name = "g6-gui"
 version = "0.1.0"
-description = "The Sound BlasterX G6 control panel, drawn with mdshared-ui. Step G2: it reads the device and shows every page; nothing writes yet."
+description = "The Sound BlasterX G6 control panel, drawn with mdshared-ui. Step G3: it reads the device and shows every page, with motion; nothing writes yet."
 edition.workspace = true
 license = "GPL-2.0-only"
 publish = false
@@ -17,9 +17,9 @@ g6-device = { path = "../g6-device" }
 g6-osaudio = { path = "../g6-osaudio" }
 # The toolkit (markdown-shared-rs), pinned to one commit like mdview and mdedit pin it. For work on both
 # sides at once, a local [patch] goes in `.cargo/config.local.toml`, which git ignores.
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }
-mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6064dfb9895481b49110a0bd133f6f82c1d949e9" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6064dfb9895481b49110a0bd133f6f82c1d949e9" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6064dfb9895481b49110a0bd133f6f82c1d949e9" }
 
 [target.'cfg(windows)'.dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }

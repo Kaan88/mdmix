@@ -3,6 +3,9 @@
 //! Step G2 draws every device control as it is on the device and inert: no hit is recorded for it. The few live
 //! controls (pages, Retry, Refresh, the appearance choices) carry a [`Hit`].
 
+use std::hash::Hash;
+
+use mdshared_ui::anim::{Animator, Id, fluent};
 use mdshared_ui::chrome::button_fill;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
@@ -11,7 +14,7 @@ use mdshared_ui::theme::Palette;
 use crate::model::{Model, Page};
 
 /// What a click on a region does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hit {
     Nav(Page),
     Settings,
@@ -87,22 +90,118 @@ impl Hits {
     }
 }
 
-/// Everything a page needs to draw: the colours, the device state, the pointer.
+/// Everything a page needs to draw: the colours, the device state, the pointer, and the animator that moves what
+/// changes.
 pub struct Env<'a> {
     pub pal: Palette,
     pub model: &'a Model,
     pub hits: Hits,
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
+    /// The window's animated values. Every widget that moves asks it for its current value while it draws.
+    pub anim: &'a mut Animator,
+    /// What the page's widgets are named under, so a switch of page never moves one page's knob into the next's.
+    scope: Id,
+    /// How many widgets of the page asked for a name so far this frame: the order they are drawn in is their name.
+    seq: u32,
 }
 
-impl Env<'_> {
+impl<'a> Env<'a> {
+    pub fn new(
+        pal: Palette,
+        model: &'a Model,
+        hover: Option<Hit>,
+        pressed: Option<Hit>,
+        anim: &'a mut Animator,
+    ) -> Env<'a> {
+        Env {
+            pal,
+            model,
+            hits: Hits::default(),
+            hover,
+            pressed,
+            anim,
+            scope: Id::new("env"),
+            seq: 0,
+        }
+    }
+
+    /// Starts a page: its widgets are named from 1 again, under the page.
+    pub fn begin_scope(&mut self, scope: impl Hash) {
+        self.scope = Id::new(scope);
+        self.seq = 0;
+    }
+
+    /// The name of the next widget of the page. A page draws its widgets in the same order every frame, so the
+    /// order is a stable name; a layout that changes (a row that appears) only makes the ones after it start fresh,
+    /// at rest, which is never wrong.
+    fn next_id(&mut self) -> Id {
+        self.seq += 1;
+        self.scope.with(self.seq)
+    }
+
     pub fn is_hover(&self, hit: Hit) -> bool {
         self.hover == Some(hit)
     }
 
     pub fn is_pressed(&self, hit: Hit) -> bool {
         self.pressed == Some(hit)
+    }
+
+    /// A hover fade: 0 to 1 over 83 ms while `on`, back while not. A name first seen is where it is going.
+    pub fn fade(&mut self, name: impl Hash, on: bool) -> f32 {
+        self.anim.toggle(name, on, fluent::FADE)
+    }
+
+    /// The switch of a row: the knob slides and the fill changes colour when the value changes. A value first
+    /// seen (the first read of a page) is drawn at rest.
+    pub fn toggle(&mut self, p: &mut Painter, pal: &Palette, r: Rect, on: Option<bool>) {
+        let id = self.next_id();
+        match on {
+            Some(on) => {
+                let t = self.anim.toggle(id, on, fluent::MOVE);
+                toggle_at(p, pal, r, t);
+            }
+            None => toggle(p, pal, r, None),
+        }
+    }
+
+    /// A slider's fraction, gliding to a new reading. `None` (not read) stays `None`.
+    pub fn glide(&mut self, frac: Option<f32>) -> Option<f32> {
+        let id = self.next_id();
+        frac.map(|f| self.anim.value(id, f, fluent::MOVE))
+    }
+
+    /// A segmented choice with motion: the chosen fill slides, the hover fades.
+    #[allow(clippy::too_many_arguments)]
+    pub fn seg(
+        &mut self,
+        p: &mut Painter,
+        pal: &Palette,
+        r: Rect,
+        labels: &[&str],
+        sel: Option<usize>,
+        hovered: Option<usize>,
+        kind: SegKind,
+    ) -> Vec<Rect> {
+        let id = self.next_id();
+        draw_seg_with(
+            p,
+            pal,
+            Some((&mut *self.anim, id)),
+            r,
+            labels,
+            sel,
+            hovered,
+            kind,
+        )
+    }
+
+    /// A push button whose fill fades between rest, hover and pressed.
+    pub fn button(&mut self, p: &mut Painter, pal: &Palette, r: Rect, label: &str, hit: Hit) {
+        let target = button_fill_of(pal, self.is_hover(hit), self.is_pressed(hit));
+        let fill = self.anim.value(("button", hit), target, fluent::FADE);
+        button(p, pal, r, label, fill);
     }
 }
 
@@ -155,26 +254,48 @@ pub const CTL_H: f32 = 28.0;
 
 /// The switch of the settings dialog: a pill with the knob at the end that says on. `None` is a state not read: a dash.
 pub fn toggle(p: &mut Painter, pal: &Palette, r: Rect, on: Option<bool>) {
-    let Some(on) = on else {
-        p.text_center(Face::Ui, 13.0, r, "—", pal.muted);
-        return;
-    };
+    match on {
+        Some(on) => toggle_at(p, pal, r, if on { 1.0 } else { 0.0 }),
+        None => p.text_center(Face::Ui, 13.0, r, "—", pal.muted),
+    }
+}
+
+/// The switch `t` of the way from off (0) to on (1): the knob has moved and the fill has changed colour by as much.
+/// At 0 and 1 it is exactly the resting look.
+pub fn toggle_at(p: &mut Painter, pal: &Palette, r: Rect, t: f32) {
     let knob = 12.0;
-    if on {
+    let t = t.clamp(0.0, 1.0);
+    let off_edge = mix(pal.muted, pal.popup, 0.35);
+    if t >= 1.0 {
         p.rbox(r, r.h / 2.0, pal.accent);
         p.rbox(
             Rect::new(r.right() - 4.0 - knob, r.cy() - knob / 2.0, knob, knob),
             knob / 2.0,
             pal.on_accent,
         );
-    } else {
-        p.frame(r, r.h / 2.0, pal.field, mix(pal.muted, pal.popup, 0.35));
+        return;
+    }
+    if t <= 0.0 {
+        p.frame(r, r.h / 2.0, pal.field, off_edge);
         p.rbox(
             Rect::new(r.x + 4.0, r.cy() - knob / 2.0, knob, knob),
             knob / 2.0,
             pal.muted,
         );
+        return;
     }
+    p.frame(
+        r,
+        r.h / 2.0,
+        mix(pal.field, pal.accent, t),
+        mix(off_edge, pal.accent, t),
+    );
+    let (x0, x1) = (r.x + 4.0, r.right() - 4.0 - knob);
+    p.rbox(
+        Rect::new(x0 + (x1 - x0) * t, r.cy() - knob / 2.0, knob, knob),
+        knob / 2.0,
+        mix(pal.muted, pal.on_accent, t),
+    );
 }
 
 /// The mockup's segmented choice: a field with a line edge and 1 px of room inside, a button per option (13 px of
@@ -204,11 +325,33 @@ pub fn seg_width(p: &mut Painter, labels: &[&str], small: bool) -> f32 {
         .sum::<f32>()
 }
 
-/// Draws a segmented choice into `r` and returns the rectangle of each button. Buttons are as wide as their text and
-/// room; extra width goes to all of them alike (`fill`: they are equal, as the mockup's `.seg.fill`).
+/// [`draw_seg_with`] with no motion: the control at rest. The tests' reference for what motion must come to.
+#[cfg(test)]
 pub fn draw_seg(
     p: &mut Painter,
     pal: &Palette,
+    r: Rect,
+    labels: &[&str],
+    sel: Option<usize>,
+    hovered: Option<usize>,
+    kind: SegKind,
+) -> Vec<Rect> {
+    draw_seg_with(p, pal, None, r, labels, sel, hovered, kind)
+}
+
+/// Draws a segmented choice into `r` and returns the rectangle of each button. Buttons are as wide as their text and
+/// room; extra width goes to all of them alike (`fill`: they are equal, as the mockup's `.seg.fill`). With motion when
+/// it is given an animator and a name: the accent fill slides from the button that was
+/// chosen to the one that is (167 ms), the hover fill fades (83 ms), and a label takes its colour by how much of its
+/// button the fill covers. The fill is kept relative to the control, so a control that moves with its window does not
+/// set it sliding. At rest, and without an animator, the pixels are those of [`draw_seg`].
+///
+/// A choice that appears when the first read arrives (it was `None`) is shown at once, not faded in.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_seg_with(
+    p: &mut Painter,
+    pal: &Palette,
+    mut anim: Option<(&mut Animator, Id)>,
     r: Rect,
     labels: &[&str],
     sel: Option<usize>,
@@ -231,24 +374,97 @@ pub fn draw_seg(
     let extra = (inner.w - total) / n;
     let mut x = inner.x;
     let mut rects = Vec::new();
-    for (k, label) in labels.iter().enumerate() {
+    for w_want in &want {
         let w = if fill {
             inner.w / n
         } else {
-            (want[k] + extra).max(0.0)
+            (w_want + extra).max(0.0)
         };
-        let seg = Rect::new(x, inner.y, w, inner.h);
+        rects.push(Rect::new(x, inner.y, w, inner.h));
         x += w;
-        if sel == Some(k) {
-            p.rbox(seg, 4.0, pal.accent);
-            p.text_center(Face::Semibold, size, seg, label, pal.on_accent);
-        } else {
-            if hovered == Some(k) {
-                p.rbox(seg, 4.0, pal.hover);
+    }
+
+    // What is on its way: how much each hover is there, where the fill is, and how solid it is.
+    let chosen = sel.filter(|&k| k < rects.len());
+    let (hover, fill_at, there) = match anim.as_mut() {
+        None => (
+            (0..rects.len())
+                .map(|k| f32::from(u8::from(hovered == Some(k) && sel != Some(k))))
+                .collect::<Vec<_>>(),
+            chosen.map(|k| rects[k]),
+            f32::from(u8::from(chosen.is_some())),
+        ),
+        Some((a, id)) => {
+            let id = *id;
+            let hover = (0..rects.len())
+                .map(|k| {
+                    a.toggle(
+                        id.with(("hover", k)),
+                        hovered == Some(k) && sel != Some(k),
+                        fluent::FADE,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let on = id.with("on");
+            // A choice read for the first time was not there before: it does not fade in.
+            if chosen.is_some() && a.settled(on) && a.get::<f32>(on) == Some(0.0) {
+                a.set(on, 1.0);
             }
-            p.text_center(Face::Ui, size, seg, label, pal.text);
+            let there = a.toggle(on, chosen.is_some(), fluent::FADE);
+            let place = id.with("fill");
+            let at = match chosen {
+                Some(k) => {
+                    let c = rects[k];
+                    let rel = Rect::new(c.x - r.x, c.y - r.y, c.w, c.h);
+                    Some(a.value(place, rel, fluent::MOVE))
+                }
+                // A choice taken away fades out where it was.
+                None if there > 0.0 => {
+                    a.keep(place);
+                    a.get::<Rect>(place)
+                }
+                None => None,
+            }
+            .map(|rel| Rect::new(r.x + rel.x, r.y + rel.y, rel.w, rel.h));
+            (hover, at, there)
         }
-        rects.push(seg);
+    };
+    for (seg, &h) in rects.iter().zip(&hover) {
+        if h >= 1.0 {
+            p.rbox(*seg, 4.0, pal.hover);
+        } else if h > 0.0 {
+            p.rbox_a(*seg, 4.0, pal.hover, h);
+        }
+    }
+    if let Some(f) = fill_at {
+        if there >= 1.0 {
+            p.rbox(f, 4.0, pal.accent);
+        } else if there > 0.0 {
+            p.rbox_a(f, 4.0, pal.accent, there);
+        }
+    }
+    for (label, seg) in labels.iter().zip(&rects) {
+        // How much of this button the fill covers: its label is the on-accent colour by as much.
+        let covered = fill_at.map_or(0.0, |f| {
+            let overlap = f.right().min(seg.right()) - f.x.max(seg.x);
+            if seg.w > 0.0 {
+                (overlap / seg.w).clamp(0.0, 1.0) * there
+            } else {
+                0.0
+            }
+        });
+        let face = if covered >= 0.5 {
+            Face::Semibold
+        } else {
+            Face::Ui
+        };
+        p.text_center(
+            face,
+            size,
+            *seg,
+            label,
+            mix(pal.text, pal.on_accent, covered),
+        );
     }
     rects
 }
@@ -307,10 +523,13 @@ pub fn dropdown_w(p: &mut Painter, text: &str) -> f32 {
     (p.measure(Face::Ui, SIZE_BODY, text) + 36.0 + 2.0).ceil()
 }
 
-/// A button. `live` buttons answer the pointer; the others are drawn quiet.
-pub fn button(p: &mut Painter, pal: &Palette, r: Rect, label: &str, hovered: bool, pressed: bool) {
-    let fill =
-        button_fill(pal, hovered, pressed, false, false).unwrap_or(mix(pal.popup, pal.text, 0.04));
+/// The fill of a button at rest, hovered or pressed.
+pub fn button_fill_of(pal: &Palette, hovered: bool, pressed: bool) -> Rgb {
+    button_fill(pal, hovered, pressed, false, false).unwrap_or(mix(pal.popup, pal.text, 0.04))
+}
+
+/// A button filled with `fill`.
+pub fn button(p: &mut Painter, pal: &Palette, r: Rect, label: &str, fill: Rgb) {
     p.frame(r, 5.0, fill, pal.popup_line);
     p.text_center(Face::Ui, SIZE_BODY, r, label, pal.text);
 }
@@ -844,7 +1063,7 @@ fn draw_ctl(
     match ctl {
         Ctl::Toggle(on) => {
             let b = place(TOGGLE_W, TOGGLE_H);
-            toggle(p, pal, b, *on);
+            env.toggle(p, pal, b, *on);
             env.hits.add(Hit::Inert, b);
         }
         Ctl::Seg {
@@ -857,7 +1076,7 @@ fn draw_ctl(
             let w = seg_width(p, &refs, *small).ceil();
             let seg_r = place(w, if *small { SEG_H_SM } else { SEG_H });
             let hovered = live.and_then(|mk| (0..labels.len()).find(|&k| env.hover == Some(mk(k))));
-            let rects = draw_seg(
+            let rects = env.seg(
                 p,
                 pal,
                 seg_r,
@@ -885,7 +1104,8 @@ fn draw_ctl(
         } => {
             let rw = reading_w(p, reading);
             let track = Rect::new(r.x, r.y, (r.w - rw - 10.0).max(40.0), r.h);
-            slider(p, pal, track, *frac, *from_middle, ground);
+            let frac = env.glide(*frac);
+            slider(p, pal, track, frac, *from_middle, ground);
             p.text_right(Face::Ui, SIZE_VALUE, r.right(), r.cy(), reading, pal.muted);
             env.hits.add(Hit::Inert, Rect::new(r.x, r.y, r.w, r.h));
         }
@@ -903,9 +1123,8 @@ fn draw_ctl(
         }
         Ctl::Button { label, hit } => {
             let b = place(button_w(p, label), CTL_H);
-            let (hv, pr) = (env.is_hover(*hit), env.is_pressed(*hit));
             let live_pal = env.pal;
-            button(p, &live_pal, b, label, hv, pr);
+            env.button(p, &live_pal, b, label, *hit);
             env.hits.add(*hit, b);
         }
     }
@@ -1038,7 +1257,7 @@ fn draw_card(p: &mut Painter, env: &mut Env, card: &Card, r: Rect) {
     if let Some(on) = card.head {
         tx -= TOGGLE_W;
         let b = Rect::new(tx, head_cy - TOGGLE_H / 2.0, TOGGLE_W, TOGGLE_H);
-        toggle(p, &pal, b, on);
+        env.toggle(p, &pal, b, on);
         env.hits.add(Hit::Inert, b);
         if let Some(l) = &card.head_label {
             let w = p.measure(Face::Semibold, 11.0, l);
@@ -1256,5 +1475,171 @@ mod tests {
         assert_eq!(grid_cols(900.0, 5), (3, 292.0));
         // Narrow: one column.
         assert_eq!(grid_cols(300.0, 4), (1, 300.0));
+    }
+
+    // ---- motion ----
+
+    use mdshared_ui::anim::{Clock, ManualClock};
+
+    fn pixels(bmp: &Bitmap) -> Vec<u8> {
+        bmp.pixels.clone()
+    }
+
+    /// One frame of an animated segmented choice, `ms` after the last.
+    fn seg_frame(
+        clock: &ManualClock,
+        anim: &mut Animator,
+        ms: u64,
+        sel: Option<usize>,
+        hovered: Option<usize>,
+    ) -> (Vec<u8>, Option<std::time::Instant>) {
+        clock.advance_ms(ms);
+        anim.begin_frame(clock.now());
+        let mut bmp = Bitmap::new(300, 40);
+        let mut gfx = Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        p.fill(
+            Rect::new(0.0, 0.0, 300.0, 40.0),
+            mdshared_ui::theme::LIGHT.popup,
+        );
+        let kind = SegKind {
+            small: false,
+            fill: false,
+        };
+        let r = Rect::new(4.0, 4.0, 240.0, SEG_H);
+        draw_seg_with(
+            &mut p,
+            &mdshared_ui::theme::LIGHT,
+            Some((&mut *anim, Id::new("seg"))),
+            r,
+            &["Light", "Dark", "System"],
+            sel,
+            hovered,
+            kind,
+        );
+        (pixels(&bmp), anim.end_frame())
+    }
+
+    fn seg_at_rest(sel: Option<usize>, hovered: Option<usize>) -> Vec<u8> {
+        let mut bmp = Bitmap::new(300, 40);
+        let mut gfx = Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        p.fill(
+            Rect::new(0.0, 0.0, 300.0, 40.0),
+            mdshared_ui::theme::LIGHT.popup,
+        );
+        let kind = SegKind {
+            small: false,
+            fill: false,
+        };
+        draw_seg(
+            &mut p,
+            &mdshared_ui::theme::LIGHT,
+            Rect::new(4.0, 4.0, 240.0, SEG_H),
+            &["Light", "Dark", "System"],
+            sel,
+            hovered,
+            kind,
+        );
+        pixels(&bmp)
+    }
+
+    #[test]
+    fn a_segmented_choice_slides_to_the_new_button_and_comes_to_rest() {
+        let (clock, mut anim) = (ManualClock::new(), Animator::new());
+        // First sight is at rest: no motion, no frame asked for.
+        let (first, deadline) = seg_frame(&clock, &mut anim, 0, Some(0), None);
+        assert_eq!(first, seg_at_rest(Some(0), None));
+        assert!(deadline.is_none());
+        // The choice changes: the frame that says so still shows the old one, then it is in between.
+        let (same, deadline) = seg_frame(&clock, &mut anim, 16, Some(2), None);
+        assert_eq!(same, seg_at_rest(Some(0), None));
+        assert!(deadline.is_some());
+        let (mid, deadline) = seg_frame(&clock, &mut anim, 64, Some(2), None);
+        assert!(deadline.is_some());
+        assert_ne!(mid, seg_at_rest(Some(0), None));
+        assert_ne!(mid, seg_at_rest(Some(2), None));
+        let mut last = (mid, deadline);
+        for _ in 0..30 {
+            last = seg_frame(&clock, &mut anim, 16, Some(2), None);
+            if last.1.is_none() {
+                break;
+            }
+        }
+        assert!(last.1.is_none(), "the slide never ends");
+        assert_eq!(last.0, seg_at_rest(Some(2), None));
+    }
+
+    #[test]
+    fn a_choice_that_was_not_read_appears_at_once() {
+        let (clock, mut anim) = (ManualClock::new(), Animator::new());
+        let (none, deadline) = seg_frame(&clock, &mut anim, 0, None, None);
+        assert_eq!(none, seg_at_rest(None, None));
+        assert!(deadline.is_none());
+        // The first read arrives: the choice is there, not faded in.
+        let (read, deadline) = seg_frame(&clock, &mut anim, 16, Some(1), None);
+        assert_eq!(read, seg_at_rest(Some(1), None));
+        assert!(deadline.is_none());
+    }
+
+    #[test]
+    fn the_hover_of_a_segmented_choice_fades_in_and_out() {
+        let (clock, mut anim) = (ManualClock::new(), Animator::new());
+        seg_frame(&clock, &mut anim, 0, Some(0), None);
+        seg_frame(&clock, &mut anim, 16, Some(0), Some(1));
+        let (mid, deadline) = seg_frame(&clock, &mut anim, 32, Some(0), Some(1));
+        assert!(deadline.is_some());
+        assert_ne!(mid, seg_at_rest(Some(0), None));
+        assert_ne!(mid, seg_at_rest(Some(0), Some(1)));
+        // A frame is never taken for more than 50 ms of motion, so it takes a few to arrive.
+        let mut last = (mid, Some(clock.now()));
+        for _ in 0..20 {
+            last = seg_frame(&clock, &mut anim, 16, Some(0), Some(1));
+            if last.1.is_none() {
+                break;
+            }
+        }
+        assert!(last.1.is_none());
+        assert_eq!(last.0, seg_at_rest(Some(0), Some(1)));
+    }
+
+    #[test]
+    fn reduced_motion_puts_a_segmented_choice_on_its_new_button_at_once() {
+        let (clock, mut anim) = (ManualClock::new(), Animator::new());
+        anim.set_system_reduced(true);
+        seg_frame(&clock, &mut anim, 0, Some(0), None);
+        let (now, deadline) = seg_frame(&clock, &mut anim, 16, Some(2), Some(1));
+        assert_eq!(now, seg_at_rest(Some(2), Some(1)));
+        assert!(deadline.is_none());
+    }
+
+    #[test]
+    fn a_switch_is_its_resting_look_at_both_ends_and_between_in_the_middle() {
+        let pal = mdshared_ui::theme::LIGHT;
+        let draw = |t: f32| {
+            let mut bmp = Bitmap::new(60, 30);
+            let mut gfx = Gfx::new();
+            let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+            p.fill(Rect::new(0.0, 0.0, 60.0, 30.0), pal.popup);
+            toggle_at(&mut p, &pal, Rect::new(10.0, 5.0, TOGGLE_W, TOGGLE_H), t);
+            pixels(&bmp)
+        };
+        let plain = |on: bool| {
+            let mut bmp = Bitmap::new(60, 30);
+            let mut gfx = Gfx::new();
+            let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+            p.fill(Rect::new(0.0, 0.0, 60.0, 30.0), pal.popup);
+            toggle(
+                &mut p,
+                &pal,
+                Rect::new(10.0, 5.0, TOGGLE_W, TOGGLE_H),
+                Some(on),
+            );
+            pixels(&bmp)
+        };
+        assert_eq!(draw(0.0), plain(false));
+        assert_eq!(draw(1.0), plain(true));
+        assert_ne!(draw(0.5), plain(false));
+        assert_ne!(draw(0.5), plain(true));
     }
 }

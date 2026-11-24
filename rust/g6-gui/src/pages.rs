@@ -327,11 +327,12 @@ fn eq_bands(
             &name,
             dim.muted,
         );
+        let frac = env.glide(v.map(db_frac));
         vslider(
             p,
             &dim,
             Rect::new(col.x, col.y + 18.0, col.w, col.h - 18.0 - 20.0),
-            v.map(db_frac),
+            frac,
             true,
             pal.popup,
         );
@@ -566,11 +567,12 @@ fn strips_rack(
         }
         let vol = st.and_then(|s| s.volume);
         let db = st.and_then(|s| s.db);
+        let frac = env.glide(vol.map(|v| f32::from(v) / 100.0));
         vslider(
             p,
             &pal,
             Rect::new(x, fd.y, fader_w, fd.h),
-            vol.map(|v| f32::from(v) / 100.0),
+            frac,
             false,
             pal.popup,
         );
@@ -1261,7 +1263,7 @@ fn draw_node(p: &mut Painter, env: &mut Env, n: &Node, r: Rect) {
     match n.switch {
         Some(on) => {
             let dim = pal;
-            kit::toggle(
+            env.toggle(
                 p,
                 &dim,
                 Rect::new(
