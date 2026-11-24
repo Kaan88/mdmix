@@ -244,11 +244,10 @@ toolkit's, and the window handle comes from `raw-window-handle` without `unsafe`
 
 ## Motion (step G3, written 2026-11-24)
 
-Built on the toolkit's `anim` module (`docs/ANIMATION.md` of markdown-shared-rs). **Not verified:** nothing here has
-run in a window; the tests move a clock by hand and `--shots` shows rest only, never motion. The look and feel are the
-user's to judge. `g6-gui` builds against a local copy of the toolkit through a `[patch]` at the end of
-`rust/Cargo.toml`, marked TEMPORARY until the toolkit's `feat/anim` is pushed; the `rev` lines of `g6-gui/Cargo.toml`
-are unchanged and still to be moved.
+Built on the toolkit's `anim` module (`docs/ANIMATION.md` of markdown-shared-rs), pinned to its pushed `feat/anim`
+(`6064dfb`, which carries the review's fixes; only `PageTransition::apply` needed changing here). **Run:** the user ran
+the release build on Windows on 2026-11-24 and judged the motion good. The tests move a clock by hand and `--shots`
+shows rest only. Reduced motion was not tried live.
 
 - **The loop (`app.rs`):** an `Animator` on a `SystemClock` lives in `fx::Fx`. A frame is drawn between `begin_frame`
   and `end_frame`; the deadline that gives (the toast's timer joins it through `wake_at`) becomes `WaitUntil`, and

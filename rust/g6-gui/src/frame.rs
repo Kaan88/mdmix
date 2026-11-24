@@ -88,7 +88,7 @@ pub fn draw_frame(
     );
     let (view, max_scroll) = draw_main(p, &mut env, input, main);
     // A page switch blends the old page into the area of the page, over what it drew and under everything else.
-    page.apply(env.anim, p.bmp);
+    page.apply(env.anim, p, view);
 
     let side = Rect::new(0.0, TITLE_H, SIDE_W, (h - TITLE_H).max(0.0));
     draw_sidebar(p, &mut env, input, side);
