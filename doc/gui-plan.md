@@ -5,7 +5,7 @@ This is the plan for building `doc/mockups/01-sbc-sidebar.html` as the real GUI.
 `doc/rust-port.md`: the GUI is built on the user's `mdshared-ui` toolkit
 (github.com/Kaan88/markdown-shared-rs), not on egui.
 
-Written 2026-11-24. Nothing in it has been built or run yet.
+Written 2026-11-24. Step G2 is built (see its note under Order of work); the rest has not been built or run yet.
 
 ## Rules this plan keeps
 
@@ -167,6 +167,63 @@ Each step ends with the checks above and a short "Run / Not verified" note in th
 | G11 | Release builds (MSVC), then retire `src/g6_cli/gui/` or keep it until parity is agreed | The user approves | — |
 
 G2 and G3 can overlap with G4's shared slider branch, since they don't touch the same files.
+
+### G2: Run / Not verified (2026-11-24, Windows, cargo 1.99.1)
+
+**Built:** `rust/g6-gui` (binary `g6-gui`, a workspace member, not a default member). The window, the title row, the
+sidebar, the eight pages and the Settings dialog (Appearance, Device) on `mdshared-ui` at `0984eed`. The model is
+a full status read by a worker thread through `g6-device` and `g6_proto::status::collect_status`; the UI thread never
+waits for HID. **It writes nothing:** the worker's only command is `Read`, no device control has a hit region, and
+the only settings that change are the app's own (theme, backdrop, corners, the page, the window's size, in
+`%LOCALAPPDATA%\g6-gui\settings.ini`). Controls are drawn as the device has them, in a faded palette; a page says
+"Device read only" in its header. A value the G6 didn't give is "—", a choice with no answer has nothing chosen.
+The mixer values and the master volume are "—" until `g6-osaudio` fills `DeviceStatus.mixer` (the model has the place,
+`model::MixerView`; map it in `Model::apply`). The speaker setup has no read-back, so none is chosen. The G6 away: a
+banner with Retry, a "Not connected" badge, the last status kept on screen.
+
+**Run:**
+
+- From `rust/`: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo test --workspace` pass (30 tests in `g6-gui`); `cargo build --release -p g6-gui` gives a 3.5 MB exe. No test
+  opens a device.
+- `cargo run --release -p g6-gui -- --shots target/g6-gui-shots` renders 50 PNGs without a window or a device: every
+  page in both themes from the recorded G6 (`tests/vectors/status_live.json`, which a test re-parses to check
+  `sample::live_status`), every page again from invented "busy" values (EQ on, SBX on, mixer values), the G6 away,
+  Mica and Acrylic simulated over a sample wallpaper, the dialog's two pages, and the smallest window (760 x 600).
+  `--shot <page> <light|dark> [--sample] [--backdrop] [--dialog] [--out] [--size] [--scale]` renders one. They are for
+  review; `target/` is ignored by git.
+- The real window was started twice on this PC with the G6 connected (no click, no key, killed after 9 to 12 s):
+  no error output, and a capture of the window showed the Equalizer page with the G6's own firmware
+  (2.1.250903.1324), Speakers, EQ off, its ten bands and the preset they match (HipHop), in the system's dark theme.
+
+**Not verified:**
+
+- Everything that needs a hand on the window: the pointer (page switching, the settings button, Retry, Read again,
+  the appearance choices), the keyboard, the wheel, dragging and resizing the frameless window, the caption buttons,
+  double-click to maximise, the dialog opened from the title row. Only drawn pictures and the unit tests cover them.
+- Backdrops on Windows 11 (Mica, Acrylic) and the focus-dependent frost: the shots only simulate the keyed chrome.
+  `platform::set_backdrop` was never called in this step's runs. Rounded corners and the shadow likewise.
+- The disconnected state live (unplugging the G6, Retry after it returns), and a read where the G6 answers only
+  in part. The shots draw the banner from a fixed state.
+- The Light theme and any display scale other than 1 in the running window; shots at scale 1.5 are only in a test.
+- Linux and macOS: `Cargo.toml` has the toolkit's winit and softbuffer features for Linux, and nothing was built
+  there. The blur path (`BlurSystem`) is written, not run.
+- The look. Nothing here counts until the user opens it.
+
+**Differences from the plan, so nobody is surprised:** the sidebar list is plain geometry (eight fixed entries and a
+rule), not `rows::Rows`; the sidebar has no Profile dropdown yet; the Signal chain lanes wrap into more rows when the
+page is narrow instead of becoming columns (that is G8, with the bypass over SBX drawn only when SBX and its
+neighbours share a row); there are no tooltips with the CLI flag and no status line (G3); the pointer shape on the
+resize bands is set, nothing else is hovered but the live buttons.
+
+**Toolkit gaps met (built in `g6-gui` for now):** the switch (`settings::draw_toggle` is private), a closed
+dropdown, a horizontal and a vertical slider, a button with hover look outside a dialog, badges; cards of rows in a
+grid; a line (the EQ curve is stroked quads through `Painter::polygon`); a disabled look for `segments::draw_segments`
+(done by passing a faded `Palette`); a read-only value row in the paged settings form (done with disabled text
+rows, whose reason line holds the explanation); a shared `--shot` harness and a way to see the frosted chrome in a
+shot (`shot.rs` keys the frame with `frost::key_out` over a sample wallpaper); and the window loop itself, as for
+mdedit. `#![forbid(unsafe_code)]` holds: the platform calls (`style_window`, `set_backdrop`, the corners) are the
+toolkit's, and the window handle comes from `raw-window-handle` without `unsafe`.
 
 ## Tests
 

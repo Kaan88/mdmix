@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["g6-proto", "g6-device", "g6-cli", "g6-testui"]
-# plain `cargo build` / `cargo run` stay on the `g6` binary; the test UI is `-p g6-testui`
+members = ["g6-proto", "g6-device", "g6-cli", "g6-testui", "g6-gui"]
+# plain `cargo build` / `cargo run` stay on the `g6` binary; the test UI is `-p g6-testui`, the GUI `-p g6-gui`
 default-members = ["g6-proto", "g6-device", "g6-cli"]
 
 [workspace.package]
