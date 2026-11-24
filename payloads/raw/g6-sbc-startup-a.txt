@@ -1,0 +1,26 @@
+g6-sbc-startup-a.pcap - SoundBlaster Command 3.5.10.0 starting up, then every tab visited, nothing changed.
+Recorded 2026-11-24 02:57 with tools/capture_g6.ps1 (USBPcap1, G6 address 12 only). Firmware 2.1.250903.1324.
+The capture holds 2.5 s / 1016 packets: SBC's whole startup burst. Tab navigation produced no USB traffic.
+Note: on startup SBC also re-sends writes (lighting 5a3a..., SBX/mic 5a1207...) carrying the current values.
+
+Settings shown in SBC at the time:
+  SBX Profile: SBX on, profile "Music"
+    Surround 63, Crystalizer 20, Bass 38, Smart Volume 77, Dialog+ 24 (all enabled)
+  Equalizer: off, preset "Flat"
+  Playback: Speakers (Stereo, Desktop), Direct Mode off, SPDIF-Out Direct Mode off,
+    Filter "Fast Roll Off - Minimum Phase", Audio Quality 24 bit 48 kHz
+  Recording / Microphone: External Mic, Mic Boost 0 dB, Voice Clarity off (NR, AEC, Smart Volume, Mic EQ unchecked),
+    Voice Morph off (Neutral), 2 channel 24 bit 48 kHz
+  Recording / Other Input: SPDIF In, What U Hear, Line In all 2 channel 24 bit 48 kHz
+  Scout Mode: off, hot key unchecked
+  Decoder: Normal
+  Mixer: Speakers ~max; monitoring Line In ~35%, External Mic ~88% (muted icon), SPDIF In ~35%;
+    recording External Mic / SPDIF In / What U Hear / Line In ~68%
+  Lighting: off (colour red)
+  Settings / Device: USB Audio Connectivity "Optimized for PC/Mac", LED Indicator off
+
+Matches found (5a110301 <id> -> 5a110801 00 <id> <float32 LE>):
+  9601 = 0.63 surround   9608 = 0.20 crystalizer   9619 = 0.38 bass   9605 = 0.77 smart volume
+  9603 = 0.24 dialog+    9600/9607/9618/9604/9602 = 1.0 (likely the per-effect enable flags)
+  9617 = 80.0 (likely bass crossover Hz)
+  5a6c0101 -> 5a6c030101: DAC filter readable while Direct Mode is off

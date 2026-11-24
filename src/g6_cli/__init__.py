@@ -731,6 +731,20 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
         ('RGB light', status.rgb_enabled),
         ('Volume ring', status.ring_enabled),
     ]
+    sbx_labels = {'surround': 'Surround', 'crystalizer': 'Crystalizer', 'bass': 'Bass',
+                  'smart_volume': 'Smart volume', 'dialog_plus': 'Dialog+'}
+    for name, effect in (status.sbx or {}).items():
+        level = '?' if effect['level'] is None else effect['level']
+        value = f"{fmt(effect['enabled'])}, {level}"
+        if name == 'smart_volume' and status.smart_volume_mode:
+            value += f', {status.smart_volume_mode}'
+        rows.append((sbx_labels.get(name, name), value))
+    rows.append(('Equalizer', status.eq_enabled))
+    if status.eq_bands_db is not None:
+        def db(v):
+            return '?' if v is None else f'{v:g}'
+        bands = ' '.join(f'{freq}:{db(v)}' for freq, v in status.eq_bands_db.items())
+        rows.append(('EQ (dB)', f'preamp {db(status.eq_preamp_db)} | {bands}'))
     return '\n'.join(f'{label:<13} {fmt(value)}' for label, value in rows)
 
 

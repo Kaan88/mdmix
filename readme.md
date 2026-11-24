@@ -18,7 +18,8 @@ suite.
 | Output (speakers / headphones) | yes | yes | HID |
 | Direct mode, SPDIF-out direct mode | yes | yes | HID |
 | DAC filter, decoder mode | yes | yes (reads 0 while Direct mode is on) | HID |
-| SBX effects (surround, crystalizer, bass, smart volume, dialog+) | yes | – | HID |
+| SBX effects (surround, crystalizer, bass, smart volume, dialog+) | yes | yes (per-effect switch + level; not the SBX master switch) | HID |
+| Equalizer (on/off, preamp, 10 bands) | – | yes | HID |
 | Voice clarity, mic boost, mic EQ | yes | – | HID |
 | RGB light, volume-ring light | yes | yes | HID |
 | Firmware version | – | yes | HID |

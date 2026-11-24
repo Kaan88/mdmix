@@ -27,6 +27,7 @@ HID_IN_ENDPOINT = 0x85
 # (5a XX 01 01 ...) double as read queries and are not listed. Used to refuse replaying writes.
 KNOWN_WRITE_PREFIXES: tuple[bytes, ...] = tuple(bytes.fromhex(h) for h in (
     '5a1207',  # SBX / recording / decoder data
+    '5a2605',  # scout mode (seen in g6-sbc-startup-b, not decoded yet)
     '5a2c05',  # output speakers/headphones
     '5a3903',  # direct mode, SPDIF direct, volume ring
     '5a3a0206',  # lighting on/off
@@ -93,8 +94,12 @@ class Event:
 def read_packets(path: str | Path) -> Iterator[UsbPacket]:
     data = Path(path).read_bytes()
     if len(data) < 12 or struct.unpack_from('<I', data, 0)[0] != 0x0A0D0D0A:
-        raise ValueError(f'{path}: not a pcapng file')
-    endian = '<' if struct.unpack_from('<I', data, 8)[0] == 0x1A2B3C4D else '>'
+        classic = _read_classic_pcap(data)
+        if classic is None:
+            raise ValueError(f'{path}: neither a pcapng nor a pcap file')
+        yield from classic
+        return
+    endian ='<' if struct.unpack_from('<I', data, 8)[0] == 0x1A2B3C4D else '>'
     linktypes: list[int] = []
     tsres: list[float] = []
     offset, index = 0, 0
@@ -116,6 +121,34 @@ def read_packets(path: str | Path) -> Iterator[UsbPacket]:
                     yield pkt
             index += 1
         offset += blen
+
+
+def _read_classic_pcap(data: bytes) -> Optional[list[UsbPacket]]:
+    """libpcap format, as written by USBPcapCMD. Returns None if ``data`` is not a pcap file."""
+    if len(data) < 24:
+        return None
+    magics = {0xA1B2C3D4: ('<', 1e-6), 0xA1B23C4D: ('<', 1e-9)}
+    magic_le, magic_be = struct.unpack_from('<I', data, 0)[0], struct.unpack_from('>I', data, 0)[0]
+    if magic_le in magics:
+        endian, res = magics[magic_le]
+    elif magic_be in magics:
+        endian, res = '>', magics[magic_be][1]
+    else:
+        return None
+    linktype = struct.unpack_from(endian + 'I', data, 20)[0] & 0x0FFFFFFF
+    if linktype != LINKTYPE_USBPCAP:
+        return []
+    packets: list[UsbPacket] = []
+    offset, index = 24, 0
+    while offset + 16 <= len(data):
+        sec, frac, incl, _orig = struct.unpack_from(endian + 'IIII', data, offset)
+        body = data[offset + 16:offset + 16 + incl]
+        pkt = _parse_usbpcap(body, index, sec + frac * res)
+        if pkt:
+            packets.append(pkt)
+        index += 1
+        offset += 16 + incl
+    return packets
 
 
 def _ts_resolution(options: bytes, endian: str) -> float:

@@ -152,6 +152,66 @@ def test_read_status_raises_without_device():
         s.read_status(hid_module=NoHid)
 
 
+# Playback parameter answers read live on 2026-11-24 (SBC state of payloads/raw/g6-sbc-startup-b.txt):
+# SBX switches off except smart volume, levels 71/11/91/90/6, EQ off with the "Hip Hop" curve.
+PLAYBACK_PARAMS = {pid: resp(f'5a1108010096{pid:02x}{raw}') for pid, raw in {
+    0x00: '00000000', 0x01: '8fc2353f', 0x02: '00000000', 0x03: '8fc2753d', 0x04: '0000803f', 0x05: '6666663f',
+    0x06: '00000000', 0x07: '00000000', 0x08: 'ae47e13d', 0x18: '00000000', 0x19: 'c3f5683f', 0x09: '00000000',
+    0x0a: '00000000', 0x0b: '00000000', 0x0c: '00000000', 0x0d: '00000040', 0x0e: '00002040', 0x0f: '0000c03f',
+    0x10: '00002040', 0x11: '00000000', 0x12: '000020c0', 0x13: '000080bf', 0x14: '0000c0bf',
+}.items()}
+CAPTURED_WITH_PARAMS = {**CAPTURED, **{s.playback_param_query(pid): r for pid, r in PLAYBACK_PARAMS.items()}}
+
+
+def test_collect_sbx_and_eq():
+    st = s.collect_status(fake_transport(CAPTURED_WITH_PARAMS))
+    assert st.sbx == {
+        'surround': {'enabled': False, 'level': 71},
+        'crystalizer': {'enabled': False, 'level': 11},
+        'bass': {'enabled': False, 'level': 91},
+        'smart_volume': {'enabled': True, 'level': 90},
+        'dialog_plus': {'enabled': False, 'level': 6},
+    }
+    assert st.smart_volume_mode == 'Normal'
+    assert st.eq_enabled is False and st.eq_preamp_db == 0.0
+    assert list(st.eq_bands_db.values()) == [0, 0, 2, 2.5, 1.5, 2.5, 0, -2.5, -1, -1.5]
+    assert list(st.eq_bands_db) == list(s.EQ_BAND_FREQS)
+
+
+def test_sbx_levels_from_startup_capture_a():
+    # payloads/raw/g6-sbc-startup-a: Surround 63, Crystalizer 20, Bass 38, Smart Volume 77, Dialog+ 24, all on
+    a = {0x01: 'ae47213f', 0x08: 'cdcc4c3e', 0x19: '5c8fc23e', 0x05: 'b81e453f', 0x03: '8fc2753e'}
+    got = {pid: s.parse_playback_param(resp(f'5a1108010096{pid:02x}{raw}'), pid) for pid, raw in a.items()}
+    assert [round(v * 100) for v in got.values()] == [63, 20, 38, 77, 24]
+    assert s.parse_playback_param(resp('5a1108010096000000803f'), 0x00) == 1.0
+
+
+def test_playback_param_rejects_answer_for_other_id():
+    # answers can arrive out of order; a reply for 0x05 must not be taken as 0x03
+    assert s.parse_playback_param(PLAYBACK_PARAMS[0x05], 0x03) is None
+    assert s.parse_playback_param(resp('5a110801009603ffffffff'), 0x03) is None  # NaN
+
+
+def test_sbx_missing_when_device_does_not_answer_params():
+    st = s.collect_status(fake_transport(CAPTURED))
+    assert st.sbx is None and st.eq_bands_db is None and st.eq_enabled is None
+
+
+def test_playback_param_queries_are_reads():
+    from g6_cli.g6_capture import is_known_write
+    for pid in range(0x00, 0x20):
+        assert not is_known_write(s.playback_param_query(pid))
+
+
+def test_format_status_shows_sbx_and_eq():
+    text = format_status(s.collect_status(fake_transport(CAPTURED_WITH_PARAMS)), as_json=False)
+    assert 'Surround      Off, 71' in text
+    assert 'Smart volume  On, 90, Normal' in text
+    assert 'EQ (dB)       preamp 0 | 31:0 62:0 125:2 250:2.5' in text
+    data = json.loads(format_status(s.collect_status(fake_transport(CAPTURED_WITH_PARAMS)), as_json=True))
+    assert data['sbx']['bass'] == {'enabled': False, 'level': 91} and data['eq_bands_db']['16k'] == -1.5
+
+
 def test_format_status_text_and_json():
     st = s.collect_status(fake_transport(CAPTURED))
     text = format_status(st, as_json=False)

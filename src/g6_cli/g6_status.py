@@ -10,16 +10,20 @@ parsers can be unit-tested against captured response bytes.
 Confidence of each field (as of firmware 2.1.250903.1324):
 - firmware, output, decoder_mode, dac_filter, rgb_enabled: matched against captures, reliable.
 - direct_mode, spdif_direct, ring_enabled: decoded from a shared flags response; matched with on/off captures.
+- sbx (per-effect switch + level), smart_volume_mode, eq_*: float32 parameters (5a110301 96 <id>), matched against
+  SoundBlaster Command in two settings states (payloads/raw/g6-sbc-startup-a/-b) and live reads.
+  The SBX *master* switch has no known readback yet.
 - Speaker layout (stereo/5.1/7.1) has no known readback and is intentionally not reported.
 """
 from __future__ import annotations
 
 import dataclasses
+import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
-from g6_cli.g6_spec import PlaybackFilter
+from g6_cli.g6_spec import AudioFeature, PlaybackFilter
 
 G6_VENDOR_ID = 0x041E
 G6_PRODUCT_ID = 0x3256
@@ -60,6 +64,27 @@ DECODER_BY_RAW = {
 # response byte -> PlaybackFilter (the low byte of the enum value)
 DAC_FILTER_BY_CODE = {pf.value[-1]: pf.name for pf in PlaybackFilter}
 
+# Playback parameters: query 5a 11 03 01 96 <id>, answer 5a 11 08 01 00 96 <id> <float32 LE>.
+# Same ids as the SBX write builders in g6_spec (AudioFeature).
+PLAYBACK_PARAM = 0x96
+SBX_EFFECTS = {  # name -> (switch id, level id); level is 0.0-1.0, reported as 0-100
+    'surround': (AudioFeature.SURROUND_TOGGLE, AudioFeature.SURROUND_SLIDER),
+    'crystalizer': (AudioFeature.CRYSTALIZER_TOGGLE, AudioFeature.CRYSTALIZER_SLIDER),
+    'bass': (AudioFeature.BASS_TOGGLE, AudioFeature.BASS_SLIDER),
+    'smart_volume': (AudioFeature.SMART_VOLUME_TOGGLE, AudioFeature.SMART_VOLUME_SLIDER),
+    'dialog_plus': (AudioFeature.DIALOG_PLUS_TOGGLE, AudioFeature.DIALOG_PLUS_SLIDER),
+}
+SMART_VOLUME_MODE_BY_VALUE = {0.0: 'Normal', 1.0: 'Loud', 2.0: 'Night'}  # see SmartVolumeSpecialHex
+EQ_ENABLE_ID = 0x09
+EQ_PREAMP_ID = 0x0A
+EQ_BAND_IDS = tuple(range(0x0B, 0x15))
+EQ_BAND_FREQS = ('31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k')  # Hz, as labelled in SBC
+
+
+def playback_param_query(param_id: int) -> bytes:
+    return bytes([0x5A, 0x11, 0x03, 0x01, PLAYBACK_PARAM, param_id])
+
+
 DAC_FILTER_LABELS = {
     PlaybackFilter.FAST_ROLL_OFF_MINIMUM_PHASE.name: 'Fast Roll-off / Minimum Phase',
     PlaybackFilter.SLOW_ROLL_OFF_MINIMUM_PHASE.name: 'Slow Roll-off / Minimum Phase',
@@ -80,6 +105,11 @@ class DeviceStatus:
     rgb_enabled: Optional[bool] = None
     ring_enabled: Optional[bool] = None
     mode_flags: Optional[tuple[int, int]] = None  # raw bytes behind direct/spdif/ring, for debugging
+    sbx: Optional[dict] = None  # effect name -> {'enabled': bool | None, 'level': int 0-100 | None}
+    smart_volume_mode: Optional[str] = None  # 'Normal' | 'Loud' | 'Night'
+    eq_enabled: Optional[bool] = None
+    eq_preamp_db: Optional[float] = None
+    eq_bands_db: Optional[dict] = None  # band label (Hz) -> dB
 
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
@@ -144,6 +174,23 @@ def _parse_on_off(r: Optional[bytes], prefix: bytes) -> Optional[bool]:
     return r[4] == 0x01
 
 
+def parse_playback_param(r: Optional[bytes], param_id: int) -> Optional[float]:
+    """float32 value of playback parameter ``param_id``; None if the answer is for another parameter."""
+    prefix = bytes([0x5A, 0x11, 0x08, 0x01, 0x00, PLAYBACK_PARAM, param_id])
+    if not r or len(r) < 11 or r[:7] != prefix:
+        return None
+    value = struct.unpack_from('<f', r, 7)[0]
+    return None if value != value else round(value, 4)  # NaN -> None
+
+
+def _switch(value: Optional[float]) -> Optional[bool]:
+    return None if value is None else value != 0.0
+
+
+def _percent(value: Optional[float]) -> Optional[int]:
+    return None if value is None else round(value * 100)
+
+
 def parse_rgb(r: Optional[bytes]) -> Optional[bool]:
     return _parse_on_off(r, R_RGB_PREFIX)
 
@@ -182,6 +229,24 @@ def collect_status(query: Transport) -> DeviceStatus:
     # The dedicated ring query was unreliable in captures; only use it when the flags response was missing.
     if status.ring_enabled is None:
         status.ring_enabled = _first_match(query, Q_RING, parse_ring)
+
+    def param(param_id: int) -> Optional[float]:
+        return parse_playback_param(query(playback_param_query(param_id)), param_id)
+
+    sbx = {}
+    for name, (switch, level) in SBX_EFFECTS.items():
+        sbx[name] = {'enabled': _switch(param(switch.value[0])), 'level': _percent(param(level.value[0]))}
+    if any(v is not None for effect in sbx.values() for v in effect.values()):
+        status.sbx = sbx
+    mode = param(AudioFeature.SMART_VOLUME_SPECIAL.value[0])
+    if mode is not None:
+        status.smart_volume_mode = SMART_VOLUME_MODE_BY_VALUE.get(mode, str(mode))
+
+    status.eq_enabled = _switch(param(EQ_ENABLE_ID))
+    status.eq_preamp_db = param(EQ_PREAMP_ID)
+    bands = {freq: param(i) for freq, i in zip(EQ_BAND_FREQS, EQ_BAND_IDS)}
+    if any(v is not None for v in bands.values()):
+        status.eq_bands_db = bands
     return status
 
 

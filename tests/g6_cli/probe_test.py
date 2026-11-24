@@ -99,3 +99,34 @@ def test_cli_snapshot_without_device_fails_cleanly(tmp_path, capsys):
     # conftest hides the real device
     assert P.main(['snapshot', '-o', str(tmp_path / 's.json')]) == 1
     assert 'not found' in capsys.readouterr().err
+
+
+def _pcapng_to_classic_pcap(src: Path, dst: Path) -> None:
+    """Re-wrap the USBPcap frames of a pcapng capture as a libpcap file, like USBPcapCMD writes."""
+    d = src.read_bytes()
+    out = bytearray(struct.pack('<IHHiIII', 0xA1B2C3D4, 2, 4, 0, 0, 65535, 249))
+    i = 0
+    while i < len(d):
+        btype, blen = struct.unpack_from('<II', d, i)
+        if btype == 6:
+            cap = struct.unpack_from('<I', d, i + 20)[0]
+            frame = d[i + 28:i + 28 + cap]
+            out += struct.pack('<IIII', 1, 0, len(frame), len(frame)) + frame
+        i += blen
+    dst.write_bytes(bytes(out))
+
+
+def test_classic_pcap_decodes_like_pcapng(tmp_path):
+    src = RAW / 'g6-recording-mic-boost-20db.pcapng'
+    dst = tmp_path / 'capture.pcap'
+    _pcapng_to_classic_pcap(src, dst)
+    a = [(e.kind, e.payload, e.response) for e in load_events(src)]
+    b = [(e.kind, e.payload, e.response) for e in load_events(dst)]
+    assert a and a == b
+
+
+def test_unknown_file_rejected(tmp_path):
+    f = tmp_path / 'x.pcap'
+    f.write_bytes(b'not a capture at all')
+    with pytest.raises(ValueError):
+        load_events(f)
