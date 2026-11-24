@@ -1,8 +1,10 @@
 //! `--status` output, as text or JSON (Python: `format_status`, `DeviceStatus.to_dict`).
 //!
-//! The mixer part (volumes from the OS audio stack) isn't ported yet, so it is always `null` / left out.
+//! The mixer part (volumes from the OS audio stack, `g6-osaudio`) is passed in separately; without it it is `null` /
+//! left out.
 
 use crate::pyval::{PyVal, dumps_indent2};
+use g6_osaudio::{EndpointEntry, Mixer, format_mixer_rows};
 use g6_proto::equalizer::EQ_BAND_FREQS;
 use g6_proto::pyfmt::py_g;
 use g6_proto::status::DeviceStatus;
@@ -24,8 +26,52 @@ fn dict(items: Vec<(&str, PyVal)>) -> PyVal {
     PyVal::Dict(items.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
 
-/// `DeviceStatus.to_dict()`.
+/// `DeviceStatus.to_dict()` with no mixer.
 pub fn status_to_pyval(st: &DeviceStatus) -> PyVal {
+    status_to_pyval_with_mixer(st, None)
+}
+
+fn endpoint_dict(items: &[(String, EndpointEntry)]) -> PyVal {
+    PyVal::Dict(
+        items
+            .iter()
+            .map(|(name, e)| {
+                let v = dict(vec![
+                    ("level_percent", PyVal::int(e.level_percent)),
+                    ("level_db", PyVal::Float(e.level_db)),
+                    ("muted", PyVal::Bool(e.muted)),
+                    ("default", PyVal::Bool(e.default)),
+                ]);
+                (name.clone(), v)
+            })
+            .collect(),
+    )
+}
+
+/// The `mixer` dict of `read_mixer()`.
+pub fn mixer_to_pyval(m: &Mixer) -> PyVal {
+    let monitoring = PyVal::Dict(
+        m.monitoring
+            .iter()
+            .map(|(name, e)| {
+                let v = dict(vec![
+                    ("level_db", opt(e.level_db, PyVal::Float)),
+                    ("muted", b(e.muted)),
+                ]);
+                (name.clone(), v)
+            })
+            .collect(),
+    );
+    dict(vec![
+        ("playback", endpoint_dict(&m.playback)),
+        ("recording", endpoint_dict(&m.recording)),
+        ("monitoring", monitoring),
+        ("speaker_layout", s(&m.speaker_layout)),
+    ])
+}
+
+/// `DeviceStatus.to_dict()` with the mixer read separately.
+pub fn status_to_pyval_with_mixer(st: &DeviceStatus, mixer: Option<&Mixer>) -> PyVal {
     let sbx = opt(st.sbx.as_ref(), |effects| {
         PyVal::Dict(
             SbxEffect::ALL
@@ -101,7 +147,7 @@ pub fn status_to_pyval(st: &DeviceStatus) -> PyVal {
         ("voice_clarity", b(st.voice_clarity)),
         ("recording", recording),
         ("mic_eq_preset", s(&st.mic_eq_preset)),
-        ("mixer", PyVal::None),
+        ("mixer", mixer.map_or(PyVal::None, mixer_to_pyval)),
     ])
 }
 
@@ -140,10 +186,15 @@ fn level(v: Option<i64>) -> String {
     v.map_or("?".into(), |l| l.to_string())
 }
 
-/// `format_status(status, as_json)`.
+/// `format_status(status, as_json)` with no mixer.
 pub fn format_status(st: &DeviceStatus, as_json: bool) -> String {
+    format_status_with_mixer(st, None, as_json)
+}
+
+/// `format_status(status, as_json)` for a status whose `mixer` is `mixer`.
+pub fn format_status_with_mixer(st: &DeviceStatus, mixer: Option<&Mixer>, as_json: bool) -> String {
     if as_json {
-        return dumps_indent2(&status_to_pyval(st));
+        return dumps_indent2(&status_to_pyval_with_mixer(st, mixer));
     }
     let dac = st.dac_filter.as_ref().map(|code| {
         PlaybackFilter::from_name(code).map_or(code.clone(), |f| f.label().to_string())
@@ -223,8 +274,29 @@ pub fn format_status(st: &DeviceStatus, as_json: bool) -> String {
         }
         rows.push(("Mic EQ", Cell::Text(mic_eq)));
     }
-    rows.iter()
+    let mut lines: Vec<String> = rows
+        .iter()
         .map(|(label, cell)| format!("{label:<13} {}", cell.render()))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    if let Some(mixer) = mixer {
+        lines.extend(
+            format_mixer_rows(mixer)
+                .iter()
+                .map(|(label, text)| format!("{label:<13} {text}")),
+        );
+    }
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod mixer_tests {
+    use super::*;
+
+    // JSON and text with a mixer are compared with Python's output in tests/parity.rs
+    #[test]
+    fn no_mixer_means_null_and_no_rows() {
+        let st = DeviceStatus::default();
+        assert!(format_status(&st, true).contains("\"mixer\": null"));
+        assert!(!format_status(&st, false).contains("Playback vol"));
+    }
 }

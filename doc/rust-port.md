@@ -35,10 +35,18 @@ harness. Build, test and fixture commands are in `rust/README.md`.
   the device, writes `00` + 64 bytes in blocking mode, waits up to 500 ms for one answer and closes. A write
   opens, sets non-blocking mode, writes each report and reads once (or, with `--debug`, until nothing is left),
   then closes, as `G6Device.HidInterface` does. `g6-cli::hid_transport::HidTransport` puts it behind `Transport`
-  and prints Python's non-dry-run messages.
+  and prints Python's non-dry-run messages (a failed availability check goes to stderr, as in Python).
 - **Without `--dry-run`** the binary uses the G6 over HID. USB Audio Control writes (volumes, mutes, speaker
-  layout) and `--claim-and-release` stop with an error until phase 4. A dry run never looks for the device.
-  Python does look, but on Windows its pyusb lookup fails without libusb, so it ends up with the placeholder too.
+  layout) and `--claim-and-release` stop with an error until phase 4.
+- **Dry runs** look for the G6 the way Python's `detect_device` does, reading only (`hidapi` enumeration, nothing
+  opened). Found: "Device with HID interface detected at path: ..." and the dry run goes by that path. Not found:
+  "This is a dry run. G6 not detected (...); using a placeholder device." with Python's wording. stdout, stderr and
+  exit code match Python's for all 235 argv of `writes.json` plus the three lookup outcomes (fixtures
+  `writes_dry_run`, `dry_run`, `dry_run_detect`), and a dry run on this Windows machine with the G6 connected was
+  compared with Python's by hand: identical.
+- **Ctrl+C** in a lighting effect without `--dry-run` (the `ctrlc` crate, =3.5.3) stops the stream, sets the static
+  colour again and exits 0, as Python's `KeyboardInterrupt` handler does. The handler is only installed when an
+  effect starts, so Ctrl+C ends the process as usual everywhere else.
 - **`g6-testui`** writes one setting per click through `Request::actions` / `Action::batches` /
   `HidTransport::send_hid`, then reads the status back. It is for testing by hand and isn't the real GUI.
 
@@ -78,15 +86,16 @@ Known differences from Python:
   `NaN`/`Infinity`, integers of any size, error messages), not by `serde_json`. A lone surrogate escape in a profile string
   becomes U+FFFD, where Python keeps the surrogate. Its `repr` in error messages escapes fewer non-printable
   characters than Python's.
-- **`--status` mixer values** are always null: the Windows Core Audio reads come with `g6-osaudio`.
+- **`--status` mixer values** come from `g6-osaudio` on Windows; on other platforms `mixer` is `null` (the Linux
+  `amixer` reader is not ported yet).
 - **Temp directory** for `--toggle-output`: TMPDIR, TEMP, TMP, then the OS default, without Python's check that
   the directory is writable.
-- **Lighting effects** without `--dry-run` run on the device, but without Ctrl+C handling (the static colour isn't
-  restored when killed); the music meter comes with `g6-osaudio`.
-- **Dry runs** don't look for a G6 (see above), so they always print the placeholder line, worded differently from
-  Python's.
-- **Device detection** doesn't look for the USB Audio Control interface (pyusb in Python), only HID. The
-  "Failed to check availability" line goes to stdout, where Python prints it on stderr.
+- **Lighting effects** without `--dry-run` run on the device; the music meter is `g6-osaudio`'s
+  `open_output_meter` (Windows only). The Ctrl+C path is tested with a fake clock and a recording transport
+  only, never on the device.
+- **Device detection** doesn't look for the USB Audio Control interface (pyusb in Python), only HID. So a G6 that
+  HID finds counts as found, and when HID finds nothing the dry run says what Python says with libusb installed
+  ("... by pyusb library ..."). Python without libusb says "No backend available" there instead.
 
 Python bugs found during the port, fixed on 2026-11-24 in both versions (tests added in Python and Rust):
 
@@ -100,8 +109,8 @@ Python bugs found during the port, fixed on 2026-11-24 in both versions (tests a
 A port bug found and fixed on the way: clap appended a repeated `--lighting-rgb` (`1 2 3 --lighting-rgb 4 5 6`),
 where argparse keeps the last colour. The argv fixture pins it.
 
-Left for G1 (`doc/gui-plan.md`): one write the user asks for on the real device, read back and restored (phase 3);
-Ctrl+C for lighting effects; and the Core Audio reads and output meter in `g6-osaudio`.
+G1 is done (`doc/gui-plan.md`). Left for later: the Linux `amixer` mixer reader (G10). Writes over HID were checked on the real G6 through `g6-testui`, which
+uses the same transport as `g6`.
 
 ## Test vectors (`tests/vectors/`)
 
@@ -163,6 +172,19 @@ Crates to start with: `hidapi`, `rusb`, `clap`, `serde` / `serde_json`, `anyhow`
    the user at a Linux machine, because claiming the interface cuts system audio. Port `--reload-audio-services`
    last, and keep it opt-in.
 5. **`g6-osaudio`.** Port the mixer readback (Windows COM) and the output meter for the music effect.
+   *Built (Windows, read only):* `rust/g6-osaudio` reads what `g6_os_audio.py` reads, through the `windows` crate
+   (`=0.62.2`, only the Media_Audio, Endpoints, Com, PropertiesSystem, FunctionDiscovery and Variant features):
+   endpoint volume/mute/default flag for the G6 playback and recording endpoints, the monitoring parts in the
+   playback endpoint's device topology, `PKEY_AudioEndpoint_PhysicalSpeakers` as the speaker layout, and
+   `open_output_meter()` (`IAudioMeterInformation`, `peak() -> f64`) for the GUI and the music effect. It is the only
+   crate with `unsafe` (each block has a `// SAFETY:` comment, the others keep `forbid(unsafe_code)`). COM is joined as
+   MTA per call/meter; interface pointers never leave their thread (`OutputMeter` is `!Send`). On other platforms
+   `read_mixer()` and `open_output_meter()` return `None`. `g6 --status` and `--status --json` print the mixer like
+   Python (JSON and text, same keys and order).
+   *Run:* `g6 --status [--json]`; `cargo run -p g6-osaudio --example meter` prints the peak level for 3 s.
+   *Not verified:* the meter while audio is playing (checked only that it opens and reads 0.0 in silence); a G6 whose
+   endpoints have other names or a 5.1/7.1 speaker setup; Core Audio errors (any error gives `mixer: null`, as in
+   Python); Linux (`amixer`) is a later step.
 6. **GUI.** Do it after the CLI is at parity.
 7. **Packaging.** Release builds for Windows (MSVC) and Linux, plus a udev rule for HID access. Then retire the
    Python package or keep it as the reference.

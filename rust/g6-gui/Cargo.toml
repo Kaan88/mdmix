@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 g6-proto = { path = "../g6-proto" }
 g6-device = { path = "../g6-device" }
+g6-osaudio = { path = "../g6-osaudio" }
 # The toolkit (markdown-shared-rs), pinned to one commit like mdview and mdedit pin it. For work on both
 # sides at once, a local [patch] goes in `.cargo/config.local.toml`, which git ignores.
 mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "0984eed03cf947cc2a746b2e2ad165b4f1d63d65" }

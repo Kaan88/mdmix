@@ -6,6 +6,8 @@ phases 1 and 2 (the protocol and the command line) and the HID half of phase 3 (
 - `g6-proto`: packet builders, value ranges, EQ presets, lighting effects, status parsers. No I/O.
 - `g6-device`: the G6 over HID through `hidapi`. It finds interface 4 the way Python does, sends `00` + 64-byte
   reports, and runs the status queries (500 ms read timeout, as in Python). USB Audio Control isn't in it yet.
+- `g6-osaudio`: read-only volumes, mutes, speaker setup and output peak meter from Windows Core Audio (`None` on
+  other platforms). The only crate with `unsafe`.
 - `g6-cli`: the `g6` binary. Same flags as the Python CLI. Without `--dry-run` it uses the G6 over HID; settings
   that go over USB Audio Control (volumes, mutes, speaker layout, `--claim-and-release`) stop with an error.
 - `g6-gui`: the real GUI, drawn with the user's `mdshared-ui` toolkit (step G2 of `doc/gui-plan.md`). It reads the G6 on
@@ -33,7 +35,7 @@ The tests need no hardware and never open a device: they run on recording and tr
   transcript. They're shared with the Python test suite. After an intended change to what the Python code sends,
   regenerate them from the repository root with `python tools/export_vectors.py` (not `--live`, which reads a real
   G6) and commit the JSON.
-- `g6-cli/tests/fixtures/python_output.json`: what the Python CLI prints (`--status` text and JSON, dry runs,
+- `g6-cli/tests/fixtures/python_output.json`: what the Python CLI prints (`--status` text and JSON, dry runs with stdout, stderr and exit code,
   profiles, option definitions, float formatting, how argparse reads awkward command lines). Regenerate it from
   the repository root with:
 
@@ -50,11 +52,11 @@ The tests need no hardware and never open a device: they run on recording and tr
 cargo run --release -- --dry-run --debug --sbx Enabled --eq-band 1k -2.5
 ```
 
-A dry run never looks for the G6. Without `--dry-run` the command writes to the device. Reading is always
+A dry run looks for the G6 (read only) but never writes to it. Without `--dry-run` the command writes to the device. Reading is always
 safe:
 
 ```sh
 cargo run --release -- --status          # or --status --json
 ```
 
-`mixer` is always `null` until `g6-osaudio` exists.
+On Windows `--status` also shows the mixer (volumes, monitoring, speaker setup) from `g6-osaudio`; elsewhere `mixer` is `null`.

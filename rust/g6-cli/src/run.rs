@@ -7,7 +7,7 @@ use crate::args::{self, Cli, PROG, ParseError};
 use crate::env::Env;
 use crate::profile::{load_profile_argv, save_profile, settings_len};
 use crate::pyval::decode_text_file;
-use crate::status_fmt::format_status;
+use crate::status_fmt::format_status_with_mixer;
 use crate::transport::Transport;
 use crate::{CliError, Io, os_error_text};
 use g6_proto::apply::Host;
@@ -125,7 +125,12 @@ pub fn main_with(argv: &[String], env: &mut dyn Env, io: &mut Io) -> Result<(), 
 
     if cli.status {
         let status = env.read_status()?;
-        writeln!(io.out, "{}", format_status(&status, cli.json))?;
+        let mixer = env.read_mixer();
+        writeln!(
+            io.out,
+            "{}",
+            format_status_with_mixer(&status, mixer.as_ref(), cli.json)
+        )?;
         if cli.only_status_requested() {
             return Ok(());
         }
@@ -224,7 +229,7 @@ pub fn device_set_audio_effects(
     env: &mut dyn Env,
     io: &mut Io,
 ) -> Result<(), CliError> {
-    if !device.is_hid_available(io.out)? {
+    if !device.is_hid_available_to(io.out, io.err)? {
         return Err(CliError::msg(
             "The G6 HID interface should be available at this point!",
         ));
@@ -266,7 +271,7 @@ pub fn device_set_audio_effects(
     applied
 }
 
-/// Python's `run_lighting_effect`: stream frames until the duration runs out, then set the static colour (red
+/// Python's `run_lighting_effect`: stream frames until the duration runs out or Ctrl+C, then set the static colour (red
 /// without one). A dry run sends one period's frames without waiting. Returns the number of frames sent.
 #[allow(clippy::too_many_arguments)] // the same parameters as the Python function
 pub fn run_lighting_effect(
@@ -316,6 +321,8 @@ pub fn run_lighting_effect(
                 effect.name()
             )?;
         }
+        // Ctrl+C ends the stream; the colour below is still restored, as Python's KeyboardInterrupt handler does
+        env.watch_interrupt()?;
         duration
     };
     // the colour has been sent already by device_set_audio_effects, so it is in range here
@@ -335,7 +342,7 @@ pub fn run_lighting_effect(
                 } else {
                     env.monotonic() - start
                 };
-                if duration.is_some_and(|d| t >= d) {
+                if duration.is_some_and(|d| t >= d) || (!dry_run && env.interrupted()) {
                     return Ok(());
                 }
                 let level = match (&mut follower, &mut meter) {

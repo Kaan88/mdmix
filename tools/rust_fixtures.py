@@ -8,7 +8,9 @@ Writes rust/g6-cli/tests/fixtures/python_output.json with:
   ``--profile-save`` would write, and the arguments ``--profile-load`` turns that profile into. The first
   transcript is tests/vectors/status_live.json; the others are made-up answers that reach the formatting paths the
   live one doesn't (no answers, unknown codes, rounding ties, custom mic EQ).
-- ``dry_run``: what ``g6 --dry-run [--debug] ...`` prints for a set of commands.
+- ``dry_run``: stdout, stderr and exit code of ``g6 --dry-run [--debug] ...`` for a set of commands, no G6 found.
+- ``dry_run_detect``: the same for a G6 that is found, not found, or lacks interface 4 (the lookup's own lines).
+- ``writes_dry_run``: the same for every argv in tests/vectors/writes.json.
 - ``effect_writes``: the HID reports ``--dry-run --lighting-effect ...`` sends, recorded like tests/vectors/writes.json.
 - ``options``: every argparse option (flags, metavar, choices, default, nargs, type, group) and whether giving it
   alone counts as something to do (``has_action``).
@@ -18,8 +20,9 @@ Writes rust/g6-cli/tests/fixtures/python_output.json with:
   parsed value as ``repr``, or the exit code, stdout and stderr of the error, help or version. ``prog`` is pinned
   to the console-script name, as argparse otherwise takes it from ``sys.argv[0]``.
 
-Nothing here touches a device. The status answers come from the transcripts, not from the G6. Dry runs get a
-placeholder device, and hidapi / pyusb are swapped for stubs that refuse to open anything, as in tests/conftest.py.
+Nothing here touches a device (hid.enumerate and usb.core.find are stubs). The status
+answers come from the transcripts, not from the G6. hidapi / pyusb are swapped for stubs that refuse to open
+anything, as in tests/conftest.py.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 import g6_cli  # noqa: E402
 import g6_cli.g6_api as g6_api  # noqa: E402
 import g6_cli.g6_core as g6_core  # noqa: E402
+import g6_cli.g6_os_audio as os_audio  # noqa: E402
 from g6_cli.g6_profile import profile_from_status, profile_to_argv  # noqa: E402
 from g6_cli.g6_status import collect_status  # noqa: E402
 
@@ -203,16 +207,71 @@ def build_status() -> list[dict]:
     return entries
 
 
-def _placeholder_device(dry_run: bool, debug: bool) -> g6_core.G6Device:
-    # what detect_device falls back to in a dry run without a G6, minus the search for one
-    return g6_core.G6Device(
-        audio_interface=g6_core.G6Device.AudioInterface(usb_device=None, device_path=g6_core.DRY_RUN_DEVICE_PATH,
-                                                        b_configuration_value=1),
-        hid_interface=g6_core.G6Device.HidInterface(device_path=g6_core.DRY_RUN_DEVICE_PATH),
-        dry_run=dry_run, debug=debug)
+def build_mixer() -> list[dict]:
+    """Status text/JSON with a mixer built from raw Core Audio style readings (g6_os_audio's own mapping code)."""
+    def ep(name, flow, db, pct, muted, default=False):
+        return os_audio.EndpointVolume(name=name, flow=flow, level_db=db, level_percent=pct, muted=muted,
+                                       is_default=default)
+
+    def ctl(name, db=(), muted=None):
+        return os_audio.TopologyControl(name=name, level_db=list(db), muted=muted)
+
+    cases = [
+        ('typical', [ep('Speakers (Sound BlasterX G6)', 'playback', -0.61, 96, False, True),
+                     ep('SPDIF In (Sound BlasterX G6)', 'recording', 0.0, 68, False),
+                     ep('External Mic (Sound BlasterX G6)', 'recording', 0.0, 68, True, True)],
+         [ctl('Speaker Volume', [-3.0]), ctl('Microphone Volume', [8.08, 8.08]), ctl('Microphone Mute', [], True),
+          ctl('SPDIF-In Mute', [], False), ctl('Auxiliary Volume', [0.0]), ctl('Auxiliary Mute', [], False),
+          ctl('External Input Recording', [0.0])], 0x3),
+        ('repeated names, odd values',
+         [ep('Speakers (Sound BlasterX G6)', 'playback', -0.04, 37, True, True),
+          ep('Speakers (2- Sound BlasterX G6)', 'playback', -26.5, 5, False),
+          ep('Line In (Sound BlasterX G6)', 'recording', -0.0, 100, False)],
+         [ctl('Auxiliary', [-0.0]), ctl('Mystery Mute', [], True)], 0x1234),
+        ('5.1, mute only', [ep('Speakers (Sound BlasterX G6)', 'playback', 0.0, 0, False, True)],
+         [ctl('SPDIF-In Mute', [], True)], 0x60F),
+        ('no layout', [], [], None),
+    ]
+    status = _transcripts()[0]
+    assert status['name'] == 'live', status['name']
+    entries = []
+    for name, endpoints, controls, mask in cases:
+        def fresh():
+            st = collect_status(_transcript_query(status['exchanges']))
+            st.mixer = os_audio.endpoints_by_flow(endpoints)
+            st.mixer['monitoring'] = os_audio.group_monitoring(controls)
+            st.mixer['speaker_layout'] = os_audio.speaker_layout(mask)
+            return st
+        entries.append({
+            'name': name,
+            'exchanges': status['exchanges'],
+            'endpoints': [e.to_dict() for e in endpoints],
+            'controls': [{'name': c.name, 'level_db': c.level_db, 'muted': c.muted} for c in controls],
+            'mask': mask,
+            'text': _run_main(['--status'], fresh()),
+            'json': _run_main(['--status', '--json'], fresh()),
+        })
+    return entries
+
+
+def build_rounding() -> list[dict]:
+    """float32 readings (as Core Audio returns them, widened to double) -> Python's rounding."""
+    import ctypes
+    values = [0.425, 0.435, 0.005, 0.015, 0.995, 0.5, 0.0, 1.0, 0.125, 0.675, 0.96, 0.745, 0.375, -0.605,
+              -12.345, 8.075, -26.5, -0.004, -0.0]
+    out = []
+    for v in values:
+        x = ctypes.c_float(v).value
+        out.append({'value': x, 'percent': round(x * 100), 'db': round(x, 2)})
+    return out
 
 
 DRY_RUN_CASES = [
+    # runs that fail: an error from main (exit 1, "error: ..." on stderr) and usage errors (exit 2)
+    ['--profile-load', 'does-not-exist.json'],
+    ['--lighting-effect', 'pulsate', '--lighting-effect-period', '-1'],
+    ['--eq-preset', 'nope'],
+    ['--sbx', 'Bogus'],
     ['--debug', '--set-output', 'Speakers'],
     ['--debug', '--playback-volume', '50'],
     ['--debug', '--playback-volume', '30', '--playback-volume-channels', 'Right'],
@@ -232,11 +291,84 @@ DRY_RUN_CASES = [
 ]
 
 
+_REAL_DETERMINE_TOGGLE_STATE = g6_cli.determine_toggle_state
+G6_PATH = rb'\\?\HID#VID_041E&PID_3256&MI_04#7&1ce30bf2&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}'
+
+
+class _FakeUsbInterface:
+    bInterfaceNumber = 0
+    bAlternateSetting = 0
+
+
+class _FakeUsbConfiguration:
+    bConfigurationValue = 1
+
+    def __iter__(self):
+        return iter([_FakeUsbInterface()])
+
+
+class _FakeUsbDevice:
+    bus, address, port_numbers = 1, 5, (2,)
+
+    def __iter__(self):
+        return iter([_FakeUsbConfiguration()])
+
+
+def _hid_entry(interface: int, path: bytes) -> dict:
+    return {'vendor_id': 0x041e, 'product_id': 0x3256, 'interface_number': interface, 'path': path}
+
+
+# What the device lookup finds. ``hid`` is what hid.enumerate returns, ``usb`` what usb.core.find returns.
+# The Rust port has no USB lookup (it goes by HID alone), so only these three are compared.
+SCENARIOS = {
+    'found': {'hid': [_hid_entry(0, b'other'), _hid_entry(4, G6_PATH)], 'usb': _FakeUsbDevice()},
+    'none': {'hid': [], 'usb': None},
+    'no_interface': {'hid': [_hid_entry(0, b'other')], 'usb': _FakeUsbDevice()},
+}
+
+
+def _run_cli(argv: list[str], scenario: str = 'none') -> dict:
+    """``cli_entry`` on ``argv`` with the device lookup stubbed: stdout, stderr and the exit code.
+    The toggle state file is in a temporary directory and says Speakers (so --toggle-output goes to Headphones)."""
+    import tempfile
+    real_toggle = _REAL_DETERMINE_TOGGLE_STATE
+    out, err, code = io.StringIO(), io.StringIO(), 0
+    sc = SCENARIOS[scenario]
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / g6_cli.TOGGLE_STATE_TEMP_FILE_NAME).write_text('Speakers')
+        with _no_hardware(), \
+                mock.patch.object(g6_core.hid, 'enumerate', return_value=sc['hid']), \
+                mock.patch.object(g6_core.usb.core, 'find', return_value=sc['usb']), \
+                mock.patch.object(g6_cli, 'determine_toggle_state', real_toggle), \
+                mock.patch.object(g6_cli.tempfile, 'gettempdir', return_value=tmp), \
+                mock.patch.object(sys, 'argv', ['soundblaster-x-g6-cli'] + argv), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                g6_cli.cli_entry()
+            except SystemExit as e:
+                code = e.code
+    return {'stdout': out.getvalue(), 'stderr': err.getvalue(), 'exit': code or 0}
+
+
 def build_dry_run() -> list[dict]:
+    """Every dry run is recorded with the real device lookup, stubbed to find nothing (the placeholder device)."""
+    return [{'argv': argv, **_run_cli(['--dry-run'] + argv)} for argv in DRY_RUN_CASES]
+
+
+def build_dry_run_detect() -> list[dict]:
+    """What the device lookup of a dry run prints, for a G6 that is there, isn't, or has no interface 4."""
+    cases = [['--sbx', 'Enabled'], ['--debug', '--lighting-effect', 'pulsate', '--lighting-effect-duration', '0.1']]
+    return [{'scenario': name, 'argv': argv, 'g6_path': G6_PATH.decode(), **_run_cli(['--dry-run'] + argv, name)}
+            for name in SCENARIOS for argv in cases]
+
+
+def build_writes_dry_run() -> list[dict]:
+    """``--dry-run`` plus each argv of tests/vectors/writes.json (the G6 not found), as the user sees it."""
+    cases = json.loads((ROOT / 'tests' / 'vectors' / 'writes.json').read_text(encoding='utf-8'))['cases']
     entries = []
-    for argv in DRY_RUN_CASES:
-        with mock.patch.object(g6_api, 'detect_device', side_effect=_placeholder_device):
-            entries.append({'argv': argv, 'stdout': _run_main(['--dry-run'] + argv)})
+    for case in cases:
+        assert not {'--claim-and-release', '--reload-audio-services', '--reload-audio-services-no-sudo'} & set(case['argv'])
+        entries.append({'argv': case['argv'], **_run_cli(['--dry-run'] + case['argv'])})
     return entries
 
 
@@ -431,7 +563,11 @@ def main():
         'note': 'Generated by tools/rust_fixtures.py from the Python CLI; do not edit. Only "live" is a real '
                 'device transcript; the other status transcripts are made-up answers for the formatting paths.',
         'status': build_status(),
+        'mixer': build_mixer(),
+        'rounding': build_rounding(),
         'dry_run': build_dry_run(),
+        'dry_run_detect': build_dry_run_detect(),
+        'writes_dry_run': build_writes_dry_run(),
         'effect_writes': build_effect_writes(),
         'options': build_options(),
         'pyfmt': build_pyfmt(),

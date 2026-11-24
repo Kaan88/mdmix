@@ -14,7 +14,9 @@ path = "src/main.rs"
 [dependencies]
 g6-proto = { path = "../g6-proto" }
 g6-device = { path = "../g6-device" }
+g6-osaudio = { path = "../g6-osaudio" }
 clap.workspace = true
+ctrlc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
