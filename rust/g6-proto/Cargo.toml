@@ -1,0 +1,13 @@
+[package]
+name = "g6-proto"
+version = "0.1.0"
+description = "Sound BlasterX G6 protocol: packet builders, status parsers, EQ presets and lighting effects. No I/O."
+edition.workspace = true
+license = "GPL-2.0-only"
+publish = false
+rust-version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+serde_json.workspace = true
