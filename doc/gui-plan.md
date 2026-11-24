@@ -242,6 +242,46 @@ shot (`shot.rs` keys the frame with `frost::key_out` over a sample wallpaper); a
 mdedit. `#![forbid(unsafe_code)]` holds: the platform calls (`style_window`, `set_backdrop`, the corners) are the
 toolkit's, and the window handle comes from `raw-window-handle` without `unsafe`.
 
+## Motion (step G3, written 2026-11-24)
+
+Built on the toolkit's `anim` module (`docs/ANIMATION.md` of markdown-shared-rs). **Not verified:** nothing here has
+run in a window; the tests move a clock by hand and `--shots` shows rest only, never motion. The look and feel are the
+user's to judge. `g6-gui` builds against a local copy of the toolkit through a `[patch]` at the end of
+`rust/Cargo.toml`, marked TEMPORARY until the toolkit's `feat/anim` is pushed; the `rev` lines of `g6-gui/Cargo.toml`
+are unchanged and still to be moved.
+
+- **The loop (`app.rs`):** an `Animator` on a `SystemClock` lives in `fx::Fx`. A frame is drawn between `begin_frame`
+  and `end_frame`; the deadline that gives (the toast's timer joins it through `wake_at`) becomes `WaitUntil`, and
+  `ResumeTimeReached` requests the redraw. With nothing moving, `end_frame` is `None` and the loop is `Wait`, as
+  before: an idle window uses no CPU. The frame interval follows the monitor's refresh rate when winit reports it.
+- **Timings (`anim::fluent`):** hover and press fades 83 ms linear; a control's change (knob, selection fill, slider
+  glide, nav highlight) 167 ms point-to-point; the page 250 ms decelerating; the toast and the tooltip enter in 167 ms
+  decelerating and leave in 167 ms and 83 ms.
+- **Pages:** the page area (below the banner, not the sidebar or the title) slides up 20 px and fades in over 250 ms
+  while the old page fades out (`PageEffect::SlideFade` from the bottom). Cross-fade was the alternative; SlideFade
+  was kept because its edge repeat is invisible here (the page's top row is its own background). The choice was
+  judged on frames rendered offline from a test, not in a window. A click during a switch starts the next from what is
+  on screen. The scroll returns to the top on a switch, with no glide.
+- **Sidebar:** the selected row's fill and accent mark slide between rows (kept relative to the list, so a sidebar that
+  reflows does not set them sliding); hover fades in nav rows, the caption buttons (the close button's red and white
+  glyph together) and the settings button; text and icon colour fade with the selection.
+- **Controls (`kit.rs`):** the segmented choice (Theme, Backdrop, Corners, the output and the speaker setup) slides its
+  fill and fades its hover; the switch slides its knob and fades its fill; sliders (horizontal, EQ and mixer faders,
+  the master volume) glide to a new reading; Retry, Refresh and card buttons fade their fill. Widgets are named by
+  page and draw order, so a value seen for the first time (start, a page's first draw, the first read) is drawn at
+  rest with no motion. A layout that changes (a row appears) makes the widgets after it start fresh, which is never wrong.
+- **Overlays:** the toast fades and rises 8 px in and fades out (`Transient`); the "Device read only" tip fades; the
+  settings dialog fades in and out as one picture. The toolkit's `Form` draws its own dimming and has no animator, so
+  the dialog does not rise and the dimming cannot be separated from the card.
+- **Scrolling:** wheel and keys move a `SmoothScroll` target and the page glides on a spring. There is no thumb drag in
+  the window yet; when there is, it uses `jump_to`.
+- **Reduced motion:** `platform::motion_reduced()` (on Windows, Settings, Accessibility, Visual effects, "Animation
+  effects") is read at start, on `ThemeChanged` and when the window gains focus. When on, every value is its target
+  at once and no frame is asked for. `--shot` and the tests that draw a frame use `Fx::still()` (`Policy::Never`), so
+  they do not depend on time; all 56 `--shots` came out byte-identical to the build before this step.
+- **Left:** the dialog's `Form` and the scrollbar do not animate (no hover state for the scrollbar yet); the tooltip has
+  no show delay; a toast showing when a page switches is part of the old page's picture and fades with it.
+
 ## Tests
 
 - **Protocol:** the vectors, as in `rust-port.md`.
