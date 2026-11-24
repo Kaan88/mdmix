@@ -161,6 +161,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_saved_backdrop_off_beats_the_default() {
+        assert_eq!(Prefs::default().backdrop, Backdrop::Mica);
+        assert_eq!(
+            Prefs::parse(
+                "[g6-gui]
+backdrop=off
+"
+            )
+            .backdrop,
+            Backdrop::Off
+        );
+    }
+
+    #[test]
     fn settings_round_trip() {
         let p = Prefs {
             theme: Theme::Dark,

@@ -202,7 +202,8 @@ fn over_wallpaper(
             } else {
                 1.0
             };
-            if cover > 0.0 {
+            // The rounded rectangle can reach a pixel past the frame at a scale that isn't whole: read only inside it.
+            if cover > 0.0 && x >= m && x < m + w && y >= m && y < m + h {
                 let v = px[(y - m) * w + (x - m)];
                 let a = (v >> 24) as f32 / 255.0;
                 // Premultiplied: the pixel's colour plus what it lets through.
@@ -333,6 +334,20 @@ mod tests {
         assert_ne!(at(&flat, 5, 700), at(&mica, 5, 700));
         assert_ne!(at(&flat, 500, 5), at(&mica, 500, 5));
         assert_eq!(at(&flat, 1100, 700), at(&mica, 1100, 700));
+    }
+
+    #[test]
+    fn a_desk_shot_at_a_scale_that_is_not_whole_does_not_panic() {
+        for scale in [1.1, 1.5, 0.7] {
+            let b = render(&ShotArgs {
+                desk: true,
+                size: (300, 200),
+                scale,
+                ..ShotArgs::new(Page::Sbx, true)
+            });
+            let m = (18.0 * scale).round() as u32;
+            assert_eq!(b.width, (300.0 * scale).round() as u32 + 2 * m);
+        }
     }
 
     #[test]

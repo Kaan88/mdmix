@@ -293,16 +293,24 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
         _ => "Speaker setup".to_string(),
     };
     let sw = kit::seg_width(p, &facts::LAYOUTS, true).ceil();
+    // The label shares the line with the control when it fits beside it; otherwise it has a line above.
+    let beside = p.measure(Face::Ui, 12.0, &caption) <= inner - sw - 8.0;
+    if !beside {
+        p.text(Face::Ui, 12.0, x, y + 8.0, &caption, pal.muted, inner);
+        y += 18.0;
+    }
     let lay_r = Rect::new(x + inner - sw, y, sw, kit::SEG_H_SM);
-    p.text(
-        Face::Ui,
-        12.0,
-        x,
-        y + kit::SEG_H_SM / 2.0,
-        &caption,
-        pal.muted,
-        inner - sw - 8.0,
-    );
+    if beside {
+        p.text(
+            Face::Ui,
+            12.0,
+            x,
+            y + kit::SEG_H_SM / 2.0,
+            &caption,
+            pal.muted,
+            inner - sw - 8.0,
+        );
+    }
     kit::draw_seg(
         p,
         &live,
@@ -586,8 +594,11 @@ mod tests {
     #[test]
     fn scrolled_out_controls_do_not_cover_the_title_row_or_the_banner() {
         let size = (760.0, 600.0);
-        for sample in [Sample::Live, Sample::Away] {
-            let (_, top) = render(Page::Settings, sample, LIGHT, size);
+        for (page, sample) in [Page::Settings, Page::Mixer, Page::Playback]
+            .into_iter()
+            .flat_map(|pg| [Sample::Live, Sample::Away].map(move |s| (pg, s)))
+        {
+            let (_, top) = render(page, sample, LIGHT, size);
             assert!(
                 top.max_scroll > 100.0,
                 "the page has to scroll for this test"
@@ -596,7 +607,7 @@ mod tests {
             let mut s = 0.0;
             // Past the end too: the window clamps the scroll, the frame must not depend on it.
             while s <= top.max_scroll + 700.0 {
-                let (_, out) = render_at(Page::Settings, sample, LIGHT, size, s);
+                let (_, out) = render_at(page, sample, LIGHT, size, s);
                 // The title row, left of the window buttons.
                 for x in (250..570).step_by(10) {
                     assert_eq!(
@@ -617,11 +628,8 @@ mod tests {
                     for x in (retry.x as i32..retry.right() as i32 - 60).step_by(10) {
                         let hit = out.hits.at(x as f32, retry.cy());
                         assert!(
-                            !matches!(
-                                hit,
-                                Some(Hit::Theme(_) | Hit::Backdrop(_) | Hit::Corners(_))
-                            ),
-                            "x {x}, scroll {s}: {hit:?}"
+                            matches!(hit, None | Some(Hit::Retry)),
+                            "{page:?} x {x}, scroll {s}: {hit:?}"
                         );
                     }
                 }
@@ -629,6 +637,59 @@ mod tests {
             }
             assert!(at_title > 0);
         }
+    }
+
+    #[test]
+    fn a_read_only_control_is_inert_and_a_click_on_it_does_nothing() {
+        let (_, out) = render(Page::Playback, Sample::Live, LIGHT, (1100.0, 720.0));
+        assert!(!Hit::Inert.acts() && !Hit::Drag.acts());
+        assert!(Hit::Retry.acts() && Hit::Nav(Page::Sbx).acts() && Hit::Theme(0).acts());
+        // The controls of the page are there to be found, as inert regions.
+        let found = (0..1100).step_by(6).any(|x| {
+            (60..720)
+                .step_by(6)
+                .any(|y| matches!(out.hits.at(x as f32, y as f32), Some(Hit::Inert)))
+        });
+        assert!(found);
+    }
+
+    /// The pixels of a Playback frame with the pointer at `at`, with or without the settings dialog open.
+    fn frame_pixels(at: Option<(f32, f32)>, dialog: bool) -> Vec<u8> {
+        let model = Sample::Live.model();
+        let prefs = Prefs::default();
+        let size = (1100.0, 720.0);
+        let mut bmp = Bitmap::new(1100, 720);
+        let mut gfx = Gfx::new();
+        let mut form = dialog.then(|| crate::dialog::form_at(&prefs, &model, 0));
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let input = FrameIn {
+            model: &model,
+            prefs: &prefs,
+            pal: LIGHT,
+            page: Page::Playback,
+            size,
+            scroll: 0.0,
+            maximized: false,
+            hover: None,
+            pointer: at,
+            pressed: None,
+            toast: None,
+            frosted: false,
+        };
+        draw_frame(&mut p, &input, form.as_mut());
+        bmp.pixels
+    }
+
+    #[test]
+    fn the_read_only_tip_shows_over_a_control_and_never_over_the_dialog() {
+        let (_, out) = render(Page::Playback, Sample::Live, LIGHT, (1100.0, 720.0));
+        let at = (0..1100)
+            .step_by(4)
+            .flat_map(|x| (60..720).step_by(4).map(move |y| (x as f32, y as f32)))
+            .find(|&(x, y)| matches!(out.hits.at(x, y), Some(Hit::Inert)))
+            .expect("an inert control");
+        assert_ne!(frame_pixels(Some(at), false), frame_pixels(None, false));
+        assert_eq!(frame_pixels(Some(at), true), frame_pixels(None, true));
     }
 
     #[test]

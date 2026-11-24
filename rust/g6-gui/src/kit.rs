@@ -33,6 +33,13 @@ pub enum Hit {
 #[derive(Clone, Debug, Default)]
 pub struct Hits(Vec<(Hit, Rect)>);
 
+impl Hit {
+    /// Whether a click on the region does anything: the title row drags the window and a read-only control is inert.
+    pub fn acts(self) -> bool {
+        !matches!(self, Hit::Drag | Hit::Inert)
+    }
+}
+
 impl Hits {
     pub fn add(&mut self, hit: Hit, r: Rect) {
         self.0.push((hit, r));
@@ -388,10 +395,10 @@ pub enum Ctl {
         reading: String,
         from_middle: bool,
     },
-    /// A dropdown showing `text`, wide enough for `widest` (the longest of its options) as well.
+    /// A dropdown showing `text`, wide enough for the widest of `options` as well.
     Dropdown {
         text: String,
-        widest: String,
+        options: Vec<String>,
     },
     /// Text, right aligned: a number, a version.
     Value {
@@ -505,13 +512,20 @@ pub fn live_seg(labels: &[&str], sel: Option<usize>, hit: fn(usize) -> Hit) -> C
 
 /// A dropdown showing `text` that is wide enough for the longest of `options`.
 pub fn dd(text: impl Into<String>, options: &[&str]) -> Ctl {
-    let text = text.into();
-    let widest = options
+    Ctl::Dropdown {
+        text: text.into(),
+        options: options.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// The width a dropdown wants: the widest of its shown text and its options, measured.
+fn dropdown_want(p: &mut Painter, text: &str, options: &[String]) -> f32 {
+    options
         .iter()
-        .chain(std::iter::once(&text.as_str()))
-        .max_by_key(|s| s.chars().count())
-        .map_or(String::new(), |s| s.to_string());
-    Ctl::Dropdown { text, widest }
+        .map(String::as_str)
+        .chain(std::iter::once(text))
+        .map(|t| dropdown_w(p, t))
+        .fold(90.0_f32, f32::max)
 }
 
 pub fn value(text: impl Into<String>) -> Ctl {
@@ -634,8 +648,8 @@ fn ctl_want(p: &mut Painter, ctl: &Ctl, inner_w: f32) -> (f32, f32) {
             let track = (inner_w * 0.5).clamp(110.0, 240.0);
             (track + 10.0 + rw, 96.0 + 10.0 + rw)
         }
-        Ctl::Dropdown { text, widest } => {
-            let w = dropdown_w(p, widest).max(dropdown_w(p, text)).max(90.0);
+        Ctl::Dropdown { text, options } => {
+            let w = dropdown_want(p, text, options);
             (w, w.min(130.0))
         }
         Ctl::Value { text, mono } => {
@@ -669,6 +683,11 @@ struct RowLay {
     ctl_y: f32,
     lines: Vec<String>,
     label_cy: f32,
+}
+
+/// The width of a row's label and its badge, on one line.
+fn label_w_of(p: &mut Painter, r: &RowSpec) -> f32 {
+    p.measure(Face::Ui, SIZE_LABEL, &r.label) + badge_room(p, r)
 }
 
 fn badge_room(p: &mut Painter, r: &RowSpec) -> f32 {
@@ -710,7 +729,7 @@ fn layout_row(p: &mut Painter, r: &RowSpec, inner_w: f32) -> RowLay {
             label_cy: 17.0,
         };
     }
-    let label_w = p.measure(Face::Ui, SIZE_LABEL, &r.label) + badge_room(p, r);
+    let label_w = label_w_of(p, r);
     let room = avail - label_w - CTL_GAP;
     let inline = if want <= room {
         Some(want)
@@ -870,8 +889,8 @@ fn draw_ctl(
             p.text_right(Face::Ui, SIZE_VALUE, r.right(), r.cy(), reading, pal.muted);
             env.hits.add(Hit::Inert, Rect::new(r.x, r.y, r.w, r.h));
         }
-        Ctl::Dropdown { text, widest } => {
-            let w = dropdown_w(p, widest).max(dropdown_w(p, text)).max(90.0);
+        Ctl::Dropdown { text, options } => {
+            let w = dropdown_want(p, text, options);
             let b = place(if left { r.w } else { w }, CTL_H);
             dropdown(p, pal, b, text);
             env.hits.add(Hit::Inert, b);
@@ -919,7 +938,8 @@ fn draw_items(
                     let max = if lay.stacked {
                         avail
                     } else {
-                        avail - lay.ctl_w - CTL_GAP
+                        // A whole pixel of slack: the measured label must not come out a hair over its room.
+                        (avail - lay.ctl_w - CTL_GAP).max(label_w_of(p, r) + 1.0)
                     };
                     let used = p.text(Face::Ui, SIZE_LABEL, lx, label_cy, &r.label, pal.text, max);
                     if let Some((t, tone)) = &r.badge {
