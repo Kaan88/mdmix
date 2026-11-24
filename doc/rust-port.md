@@ -78,11 +78,12 @@ Known differences from Python:
   `NaN`/`Infinity`, integers of any size, error messages), not by `serde_json`. A lone surrogate escape in a profile string
   becomes U+FFFD, where Python keeps the surrogate. Its `repr` in error messages escapes fewer non-printable
   characters than Python's.
-- **`--status` mixer values** are always null: the Windows Core Audio reads come with `g6-osaudio`.
+- **`--status` mixer values** come from `g6-osaudio` on Windows; on other platforms `mixer` is `null` (the Linux
+  `amixer` reader is not ported yet).
 - **Temp directory** for `--toggle-output`: TMPDIR, TEMP, TMP, then the OS default, without Python's check that
   the directory is writable.
 - **Lighting effects** without `--dry-run` run on the device, but without Ctrl+C handling (the static colour isn't
-  restored when killed); the music meter comes with `g6-osaudio`.
+  restored when killed); the music meter is `g6-osaudio`'s `open_output_meter` (Windows only).
 - **Dry runs** don't look for a G6 (see above), so they always print the placeholder line, worded differently from
   Python's.
 - **Device detection** doesn't look for the USB Audio Control interface (pyusb in Python), only HID. The
@@ -101,7 +102,7 @@ A port bug found and fixed on the way: clap appended a repeated `--lighting-rgb`
 where argparse keeps the last colour. The argv fixture pins it.
 
 Left for G1 (`doc/gui-plan.md`): one write the user asks for on the real device, read back and restored (phase 3);
-Ctrl+C for lighting effects; and the Core Audio reads and output meter in `g6-osaudio`.
+and Ctrl+C for lighting effects.
 
 ## Test vectors (`tests/vectors/`)
 
@@ -163,6 +164,19 @@ Crates to start with: `hidapi`, `rusb`, `clap`, `serde` / `serde_json`, `anyhow`
    the user at a Linux machine, because claiming the interface cuts system audio. Port `--reload-audio-services`
    last, and keep it opt-in.
 5. **`g6-osaudio`.** Port the mixer readback (Windows COM) and the output meter for the music effect.
+   *Built (Windows, read only):* `rust/g6-osaudio` reads what `g6_os_audio.py` reads, through the `windows` crate
+   (`=0.62.2`, only the Media_Audio, Endpoints, Com, PropertiesSystem, FunctionDiscovery and Variant features):
+   endpoint volume/mute/default flag for the G6 playback and recording endpoints, the monitoring parts in the
+   playback endpoint's device topology, `PKEY_AudioEndpoint_PhysicalSpeakers` as the speaker layout, and
+   `open_output_meter()` (`IAudioMeterInformation`, `peak() -> f64`) for the GUI and the music effect. It is the only
+   crate with `unsafe` (each block has a `// SAFETY:` comment, the others keep `forbid(unsafe_code)`). COM is joined as
+   MTA per call/meter; interface pointers never leave their thread (`OutputMeter` is `!Send`). On other platforms
+   `read_mixer()` and `open_output_meter()` return `None`. `g6 --status` and `--status --json` print the mixer like
+   Python (JSON and text, same keys and order).
+   *Run:* `g6 --status [--json]`; `cargo run -p g6-osaudio --example meter` prints the peak level for 3 s.
+   *Not verified:* the meter while audio is playing (checked only that it opens and reads 0.0 in silence); a G6 whose
+   endpoints have other names or a 5.1/7.1 speaker setup; Core Audio errors (any error gives `mixer: null`, as in
+   Python); Linux (`amixer`) is a later step.
 6. **GUI.** Do it after the CLI is at parity.
 7. **Packaging.** Release builds for Windows (MSVC) and Linux, plus a udev rule for HID access. Then retire the
    Python package or keep it as the reference.

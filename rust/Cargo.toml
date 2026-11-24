@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["g6-proto", "g6-device", "g6-cli", "g6-testui"]
+members = ["g6-proto", "g6-device", "g6-osaudio", "g6-cli", "g6-testui"]
 # plain `cargo build` / `cargo run` stay on the `g6` binary; the test UI is `-p g6-testui`
-default-members = ["g6-proto", "g6-device", "g6-cli"]
+default-members = ["g6-proto", "g6-device", "g6-osaudio", "g6-cli"]
 
 [workspace.package]
 edition = "2024"

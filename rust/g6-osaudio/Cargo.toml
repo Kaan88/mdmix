@@ -1,0 +1,20 @@
+[package]
+name = "g6-osaudio"
+version = "0.1.0"
+description = "Read-only view of the G6's volumes, mutes, speaker setup and output peak level from the OS audio stack (Windows Core Audio)."
+edition.workspace = true
+license = "GPL-2.0-only"
+publish = false
+rust-version.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }

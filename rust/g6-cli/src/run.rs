@@ -7,7 +7,7 @@ use crate::args::{self, Cli, PROG, ParseError};
 use crate::env::Env;
 use crate::profile::{load_profile_argv, save_profile, settings_len};
 use crate::pyval::decode_text_file;
-use crate::status_fmt::format_status;
+use crate::status_fmt::format_status_with_mixer;
 use crate::transport::Transport;
 use crate::{CliError, Io, os_error_text};
 use g6_proto::apply::Host;
@@ -125,7 +125,12 @@ pub fn main_with(argv: &[String], env: &mut dyn Env, io: &mut Io) -> Result<(), 
 
     if cli.status {
         let status = env.read_status()?;
-        writeln!(io.out, "{}", format_status(&status, cli.json))?;
+        let mixer = env.read_mixer();
+        writeln!(
+            io.out,
+            "{}",
+            format_status_with_mixer(&status, mixer.as_ref(), cli.json)
+        )?;
         if cli.only_status_requested() {
             return Ok(());
         }
