@@ -1,4 +1,4 @@
-//! `g6`: the binary. Without a device layer yet (G1) only dry runs reach the end.
+//! `g6`: the binary. Without `--dry-run` it talks to the G6 over HID.
 
 #![forbid(unsafe_code)]
 

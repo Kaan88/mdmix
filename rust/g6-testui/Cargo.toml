@@ -1,0 +1,18 @@
+[package]
+name = "g6-testui"
+version = "0.1.0"
+description = "Throwaway egui test harness for trying the Rust port on a real G6. Not the real GUI."
+edition.workspace = true
+license = "GPL-2.0-only"
+publish = false
+rust-version.workspace = true
+
+[[bin]]
+name = "g6-testui"
+path = "src/main.rs"
+
+[dependencies]
+g6-proto = { path = "../g6-proto" }
+g6-device = { path = "../g6-device" }
+g6-cli = { path = "../g6-cli" }
+eframe.workspace = true

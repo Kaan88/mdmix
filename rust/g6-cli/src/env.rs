@@ -6,15 +6,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::CliError;
+use crate::hid_transport::HidTransport;
 use crate::transport::{DryRunTransport, Transport};
+use g6_device::{Hid, STATUS_NOT_FOUND};
 use g6_proto::status::DeviceStatus;
 
 /// Python's `TOGGLE_STATE_TEMP_FILE_NAME`.
 pub const TOGGLE_STATE_FILE_NAME: &str = "g6-cli-toggle-state";
-
-/// What G0 says wherever Python would open the G6.
-pub const NOT_BUILT: &str =
-    "device access isn't built yet in the Rust port (step G1); only --dry-run works";
 
 pub trait Env {
     /// Python's `detect_device`: the G6, or in a dry run without one, a placeholder.
@@ -52,7 +50,7 @@ pub fn python_temp_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// The real system, as far as G0 goes: dry runs only.
+/// The real system: the G6 over HID. The mixer readback and the output meter come with `g6-osaudio`.
 pub struct SystemEnv {
     start: Instant,
 }
@@ -73,18 +71,23 @@ impl Env for SystemEnv {
         out: &mut dyn Write,
     ) -> Result<Box<dyn Transport>, CliError> {
         if !dry_run {
-            return Err(CliError::msg(NOT_BUILT));
+            return Ok(Box::new(HidTransport::detect(debug, out)?));
         }
-        // Python prints this when a dry run finds no G6; G0 never looks for one
+        // Python looks for the G6 in a dry run too; the port doesn't, so a dry run never opens or enumerates
+        // anything (on Windows Python's USB lookup fails without libusb and ends up here as well)
         writeln!(
             out,
-            "This is a dry run. G6 not detected (device access isn't built yet); using a placeholder device."
+            "This is a dry run. G6 not detected (the Rust port doesn't look for it in a dry run); using a placeholder device."
         )?;
         Ok(Box::new(DryRunTransport::new(debug)))
     }
 
     fn read_status(&mut self) -> Result<DeviceStatus, CliError> {
-        Err(CliError::msg(NOT_BUILT))
+        let mut hid = Hid::new().map_err(|e| CliError::Msg(e.0))?;
+        match hid.find_path().map_err(|e| CliError::Msg(e.0))? {
+            Some(path) => Ok(hid.read_status(&path)),
+            None => Err(CliError::msg(STATUS_NOT_FOUND)),
+        }
     }
 
     fn toggle_state_path(&self) -> PathBuf {
@@ -104,9 +107,8 @@ impl Env for SystemEnv {
             )?;
             return Ok(());
         }
-        // unreachable in G0 (a run that isn't dry fails at open_device), but say so rather than pretend
         Err(CliError::msg(
-            "reloading ALSA and PipeWire isn't built yet in the Rust port (step G1)",
+            "reloading ALSA and PipeWire isn't built yet in the Rust port (phase 4)",
         ))
     }
 
@@ -121,7 +123,7 @@ impl Env for SystemEnv {
     }
 
     fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>> {
-        // the Windows meter comes with G1
+        // the Windows meter comes with g6-osaudio
         None
     }
 }

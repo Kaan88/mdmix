@@ -1,6 +1,6 @@
-//! How writes reach the G6. G0 has no device I/O: there is the dry run (which prints what Python's `G6Device`
-//! prints in a dry run), a recorder for tests, and a fake that answers status queries from a transcript.
-//! The hidapi / USB transport comes with G1.
+//! How writes reach the G6: the dry run (which prints what Python's `G6Device` prints in a dry run), a recorder for
+//! tests, and a fake that answers status queries from a transcript. The real device is
+//! [`crate::hid_transport::HidTransport`].
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};

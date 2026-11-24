@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 g6-proto = { path = "../g6-proto" }
+g6-device = { path = "../g6-device" }
 clap.workspace = true
 
 [dev-dependencies]

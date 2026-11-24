@@ -6,6 +6,7 @@
 pub mod argparse;
 pub mod args;
 pub mod env;
+pub mod hid_transport;
 pub mod profile;
 pub mod pyval;
 pub mod run;

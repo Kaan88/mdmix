@@ -18,8 +18,9 @@ Out of scope, as in the Python version: firmware updates, the Speaker Type and B
 
 ## Where it stands
 
-Phases 1 and 2 are done (step G0 of `doc/gui-plan.md`): the `rust/` workspace has `g6-proto` and `g6-cli` (binary
-`g6`), with no device I/O. Build, test and fixture commands are in `rust/README.md`.
+Phases 1 and 2 are done (step G0 of `doc/gui-plan.md`), and the HID half of phase 3: the `rust/` workspace has
+`g6-proto`, `g6-device` (HID through `hidapi`), `g6-cli` (binary `g6`) and `g6-testui`, a throwaway egui test
+harness. Build, test and fixture commands are in `rust/README.md`.
 
 - **`g6-proto`**: every packet builder, enum and value range, the EQ presets, the lighting effects, the status
   queries and parsers with a pure `collect_status`, and the order of writes in one place (`apply::Request::actions`).
@@ -29,9 +30,17 @@ Phases 1 and 2 are done (step G0 of `doc/gui-plan.md`): the `rust/` workspace ha
   `Env` trait (status read, toggle state file, clock, output meter). `argparse.rs` reads the command line the way
   Python 3.13's argparse does (abbreviations, values that start with "-", `=`, `--`, glued `-h`, the order errors
   are found in, and their wording) and only then hands clap a spelled-out command line.
-- **Without a device** the binary only completes dry runs. Anything that needs the G6, including `--status` and
-  `--profile-save` (it reads the status first), says "device access isn't built yet in the Rust port (step G1)".
-  `--profile-save` is tested through the fake transport instead.
+- **`g6-device`** (2026-11-24): `hidapi` =2.6.7 (its bundled C hidapi, like Python's `hid` module). It picks the
+  first entry with vendor 0x041e, product 0x3256 and interface 4, as `find_hid_path` does. A status query opens
+  the device, writes `00` + 64 bytes in blocking mode, waits up to 500 ms for one answer and closes. A write
+  opens, sets non-blocking mode, writes each report and reads once (or, with `--debug`, until nothing is left),
+  then closes, as `G6Device.HidInterface` does. `g6-cli::hid_transport::HidTransport` puts it behind `Transport`
+  and prints Python's non-dry-run messages.
+- **Without `--dry-run`** the binary uses the G6 over HID. USB Audio Control writes (volumes, mutes, speaker
+  layout) and `--claim-and-release` stop with an error until phase 4. A dry run never looks for the device.
+  Python does look, but on Windows its pyusb lookup fails without libusb, so it ends up with the placeholder too.
+- **`g6-testui`** writes one setting per click through `Request::actions` / `Action::batches` /
+  `HidTransport::send_hid`, then reads the status back. It is for testing by hand and isn't the real GUI.
 
 What was run (2026-11-24, Windows, cargo 1.99.1, Python 3.13.17):
 
@@ -45,7 +54,12 @@ What was run (2026-11-24, Windows, cargo 1.99.1, Python 3.13.17):
 - `cargo fmt --all --check` and `cargo clippy --release --workspace --all-targets -- -D warnings`: clean.
 - `python -m pytest -q -m "not hardware"`: 1290 passed. No Python behaviour was changed.
 
-What wasn't run, on purpose: anything that touches a G6 or any USB/HID device (no `hidapi` or `rusb` yet), the
+Read-only on the real G6 (2026-11-24, Windows, firmware 2.1.250903.1324): `g6 --status --json` and `g6 --status`
+from the release build match `python -m g6_cli --status --json` / `--status` byte for byte, apart from `mixer`
+(see below). Nothing was written to the device: no `g6` run without `--dry-run` other than `--status`, and the
+test UI was built but not started.
+
+What wasn't run, on purpose: any write to a G6 (the HID write path and the test UI are unverified on hardware), the
 hardware tests, `tools/export_vectors.py --live`, and Python's `--claim-and-release` and `--reload-audio-services`,
 not even as dry runs. The Rust claim/release/reload paths were written from reading the Python source and are
 unverified.
@@ -63,7 +77,12 @@ Known differences from Python:
 - **`--status` mixer values** are always null: the Windows Core Audio reads come with `g6-osaudio`.
 - **Temp directory** for `--toggle-output`: TMPDIR, TEMP, TMP, then the OS default, without Python's check that
   the directory is writable.
-- **Lighting effects** without `--dry-run` need the device; Ctrl+C handling and the music meter come with G1.
+- **Lighting effects** without `--dry-run` run on the device, but without Ctrl+C handling (the static colour isn't
+  restored when killed); the music meter comes with `g6-osaudio`.
+- **Dry runs** don't look for a G6 (see above), so they always print the placeholder line, worded differently from
+  Python's.
+- **Device detection** doesn't look for the USB Audio Control interface (pyusb in Python), only HID. The
+  "Failed to check availability" line goes to stdout, where Python prints it on stderr.
 
 Python bugs found during the port, fixed on 2026-11-24 in both versions (tests added in Python and Rust):
 
@@ -77,9 +96,8 @@ Python bugs found during the port, fixed on 2026-11-24 in both versions (tests a
 A port bug found and fixed on the way: clap appended a repeated `--lighting-rgb` (`1 2 3 --lighting-rgb 4 5 6`),
 where argparse keeps the last colour. The argv fixture pins it.
 
-Left for G1 (`doc/gui-plan.md`): `g6-device` on Windows HID (`hidapi`, interface 4, report id 0), the status
-query loop on the real device (`g6 --status --json` must match Python's), Ctrl+C for lighting effects, and the
-Core Audio reads and output meter in `g6-osaudio`.
+Left for G1 (`doc/gui-plan.md`): one write the user asks for on the real device, read back and restored (phase 3);
+Ctrl+C for lighting effects; and the Core Audio reads and output meter in `g6-osaudio`.
 
 ## Test vectors (`tests/vectors/`)
 

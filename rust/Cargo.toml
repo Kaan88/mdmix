@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["g6-proto", "g6-cli"]
+members = ["g6-proto", "g6-device", "g6-cli", "g6-testui"]
+# plain `cargo build` / `cargo run` stay on the `g6` binary; the test UI is `-p g6-testui`
+default-members = ["g6-proto", "g6-device", "g6-cli"]
 
 [workspace.package]
 edition = "2024"
@@ -11,6 +13,8 @@ rust-version = "1.99"
 [workspace.dependencies]
 clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 serde_json = "=1.0.154"
+hidapi = "=2.6.7"
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 
 [profile.release]
 opt-level = 3

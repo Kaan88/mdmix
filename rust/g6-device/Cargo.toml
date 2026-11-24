@@ -1,0 +1,12 @@
+[package]
+name = "g6-device"
+version = "0.1.0"
+description = "Sound BlasterX G6 over HID (hidapi): finds interface 4, sends reports, answers status queries."
+edition.workspace = true
+license = "GPL-2.0-only"
+publish = false
+rust-version.workspace = true
+
+[dependencies]
+g6-proto = { path = "../g6-proto" }
+hidapi.workspace = true
