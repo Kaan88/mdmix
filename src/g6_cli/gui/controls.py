@@ -11,6 +11,7 @@ from typing import Optional
 
 from g6_cli.g6_spec import PlaybackFilter
 from g6_cli.g6_spec.equalizer import EQ_BAND_FREQS
+from g6_cli.g6_spec.eq_presets import EQ_PRESETS
 from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
 from g6_cli.g6_status import DAC_FILTER_LABELS
 
@@ -84,6 +85,7 @@ SBX_MODE = Section('Processing Mode', (
 
 EQUALIZER = Section('Equalizer', (
     Toggle('Enable', 'eq'),
+    Option('SBC Preset', 'eq-preset', tuple(EQ_PRESETS)),
     Slider('Preamp (dB)', 'eq-preamp', lo=-12, hi=12),
     *(Slider(f'{freq} Hz' if not freq.endswith('k') else f'{freq}Hz', 'eq-band', lo=-12, hi=12, args=(freq,))
       for freq in EQ_BAND_FREQS),

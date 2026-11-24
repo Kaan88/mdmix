@@ -21,12 +21,14 @@ suite.
 | SBX master switch, Scout Mode | yes | yes | HID |
 | SBX effects (surround, crystalizer, bass, smart volume, dialog+) | yes | yes | HID |
 | Equalizer (on/off, preamp, 10 bands) | yes | yes | HID |
+| EQ presets (SBC's 43, speaker and headphone curves) | yes (`--eq-preset`) | as the band values | HID |
 | Mic boost | yes | yes | HID |
 | Voice clarity, noise reduction, AEC, mic smart volume, mic EQ + preset | yes | yes | HID |
 | Headphone virtualization to Line Out | yes | yes | HID |
 | RGB light on/off, volume-ring light | yes | yes | HID |
 | RGB colour | yes | – (SBC can't either) | HID |
-| RGB effects pulsate, cycle | yes, host-side (`--lighting-effect`) | – | HID |
+| RGB effects pulsate, cycle, music reactive | yes, host-side at 30 fps (`--lighting-effect`, GUI); music: Windows | – | HID |
+| Profiles (save / load the sound settings) | yes (`--profile-save`, `--profile-load`, GUI) | – | HID |
 | Firmware version | – | yes | HID |
 | Volumes / mutes / mixer | yes | Windows (Core Audio), Linux (amixer, untested on hardware) | USB Audio Control (needs claim on Linux) |
 | Speaker layout | yes | Windows (speaker setup) | USB Audio Control |
@@ -79,8 +81,12 @@ g6 --toggle-output
 g6 --sbx-surround Enabled --sbx-surround-value 40
 g6 --scout-mode Disabled --sbx Enabled
 g6 --eq Enabled --eq-preamp -2 --eq-band 1k 1.5 --eq-band 16k -3
+g6 --eq Enabled --eq-preset "hip hop"   # SBC's preset, curve for the current output
 g6 --lighting-volume-ring Disabled
 g6 --lighting-effect pulsate --lighting-rgb 0 0 255   # animate from this PC until Ctrl+C (the G6 stores no effect)
+g6 --lighting-effect music                           # brightness follows what the G6 plays (Windows)
+g6 --profile-save gaming.json                        # current sound settings to a file
+g6 --profile-load gaming.json                        # and back
 g6 --dry-run --debug --playback-filter SLOW_ROLL_OFF_LINEAR_PHASE   # print the packets, send nothing
 g6 --help                   # every option
 ```

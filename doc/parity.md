@@ -27,8 +27,9 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Mic EQ on/off + presets | ✅ | ✅ | HID | `95 13` switch, `95 14–1b` gains matched to `MicrophoneEqualizerPreset` (PRESET_1/2 band `17` fixed: 2 dB, was ~0) |
 | RGB light on/off | ✅ | ✅ | HID | |
 | RGB static colour | ✅ | – | HID | SBC never reads the colour back either: its startup queries (`5a3a01…`, `5a3a02…`, `5a3a03…`) don't contain it, SBC keeps it host-side |
-| RGB effects pulsate, cycle | ✅ | – | HID | **host-side**, like SBC: `--lighting-effect {pulsate,cycle}` streams frames `5a3a020601`, `5a3a06040003010001`, `5a3a090a00030101 <brightness> <b> <g> <r>` (the byte `lighting_enable_set_rgb` fixed to `ff` is the brightness). Pulsate ramps brightness, cycle crossfades red→blue→green. Runs in the foreground; ~10 frames/s because the transport reopens the device per frame |
-| RGB effects solo, music reactive | – | – | HID | solo = static colour; music reactive needs the audio signal, not done |
+| RGB effects pulsate, cycle | ✅ | – | HID | **host-side**, like SBC: `--lighting-effect {pulsate,cycle}` streams frames `5a3a020601`, `5a3a06040003010001`, `5a3a090a00030101 <brightness> <b> <g> <r>` (the byte `lighting_enable_set_rgb` fixed to `ff` is the brightness). Pulsate ramps brightness, cycle crossfades red→blue→green. Runs in the foreground at 30 frames/s (the HID handle stays open for the run: `HidInterface.held_open`). GUI: Lighting tab → Lighting Effects, kept running by the window |
+| RGB effect music reactive | ✅ | – | HID | host-side, own design (SBC sent no frames in the capture, nothing was playing): `--lighting-effect music`, peak level of the G6 playback endpoint (Core Audio `IAudioMeterInformation`, Windows only) on a −45…0 dB scale → brightness, instant attack, 0.25 s decay; the `--lighting-rgb` colour or a 12 s colour cycle. Linux: ❌ (no meter yet) |
+| RGB effect solo | ✅ | – | HID | = static colour (`--lighting-rgb`) |
 | Volume ring light (SBC: LED indicator) | ✅ | ✅ | HID | write `5a3903 00 0e <00 on / 01 off>` |
 | Playback volume L/R | ✅ | 🟡 | UAC | Windows: read through Core Audio (`g6_os_audio`), since libusb can't GET_CUR an interface the audio driver owns. Linux: `amixer -c <G6> scontents`, parser unit-tested only, the G6's ALSA control names are unconfirmed |
 | Playback mute | ✅ | 🟡 | UAC | as above |
@@ -39,10 +40,10 @@ AudioControl interface (needs the kernel driver detached on Linux).
 | Speaker type (desktop / bookshelf) | – | – | – | app-side: no USB traffic when changed (g6-sbc-session-c) |
 | Headphone virtualization to Line Out | ✅ | ✅ | HID | `5a3903 00 0a <01/00>` (Direct-mode family); readback = flags byte B bit 0x04 (snapshot diff: `5a39050120400004` off, `…20440004` on) |
 | Graphic equalizer on/off, preamp, 10 bands | ✅ | ✅ | HID | `5a1207 0196 <09 / 0a / 0b–14> <float32>` + commit, confirmed in g6-sbc-session-c |
-| EQ presets | – | – | – | app-side: a preset is just 10 band values |
+| EQ presets | ✅ | via the bands | HID | app-side: `--eq-preset NAME` writes preamp + 10 bands from SBC's own preset files (`%ProgramData%/Creative/SBCommand/Product/G6/Presets/EQ`, 43 presets, separate speaker/headphone curves; Rock and Hip Hop match g6-sbc-session-c). The G6 stores no preset name |
 | Scout Mode | ✅ | ✅ | HID | write `5a2605 07 02 00 <on>`; mode register bit 0x02 |
 | Headphone gain / impedance | – | – | – | hardware switch only; SBC's headphone dialog has no gain setting |
-| Profiles (save / load) | ❌ | – | – | probably app-side: a bundle of the settings above, no own protocol |
+| Profiles (save / load) | ✅ | – | HID | ours, not SBC's file format: `--profile-save FILE` stores the HID settings above as CLI flags in JSON, `--profile-load FILE` applies them (only known setting flags accepted). Not included: output, RGB colour (no readback), volumes, speaker layout. GUI: System tab → Profiles |
 | Firmware version | – | ✅ | HID | |
 | Firmware update | ✗ | – | – | **out of scope**: this is the one place you can brick the card |
 

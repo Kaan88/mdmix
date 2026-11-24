@@ -204,3 +204,40 @@ class CommandRunner:
     def _log_output(self, text: str, kind: str) -> None:
         for line in text.strip().splitlines():
             self._log(line, kind)
+
+
+class EffectProcess:
+    """
+    A long-running CLI process (a host-side lighting effect) next to the one-shot CommandRunner: it does not take
+    the runner's lock or its timeout. ``stop`` terminates it; the caller then writes the static colour again, since
+    a terminated CLI can't run its own cleanup.
+    """
+
+    def __init__(self, log: LogFn, popen=subprocess.Popen):
+        self._log = log
+        self._popen = popen
+        self._proc: Optional[subprocess.Popen] = None
+
+    @property
+    def running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def start(self, args: Sequence[str], dry_run: bool = False) -> None:
+        self.stop()
+        cmd = cli_base_command() + (['--dry-run'] if dry_run else []) + [str(a) for a in args]
+        self._log('$ ' + ' '.join(cmd[2:]) + '   (runs until stopped)', 'cmd')
+        self._proc = self._popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 creationflags=_NO_WINDOW)
+
+    def stop(self) -> bool:
+        """Terminate the effect. Returns True if one was running."""
+        proc, self._proc = self._proc, None
+        if proc is None or proc.poll() is not None:
+            return False
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        self._log('■  Lighting effect stopped', 'dim')
+        return True

@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import re
 import sys
@@ -258,6 +259,26 @@ class G6Device:
             self.__device_path = device_path
             self.__available = False
             self.__availability_last_checked = None
+            self.__held = None  # an open hid.device while held_open() is active
+
+        @contextlib.contextmanager
+        def held_open(self, dry_run: bool):
+            """
+            Keep the device open across sends, e.g. for streamed lighting frames (opening it per send caps a
+            stream at about 10 sends per second). Sends inside the block reuse the handle.
+            """
+            if dry_run or self.__held is not None:
+                yield
+                return
+            h = hid.device()
+            h.open_path(self.__device_path)
+            h.set_nonblocking(1)
+            self.__held = h
+            try:
+                yield
+            finally:
+                self.__held = None
+                h.close()
 
         def is_available(self, dry_run: bool) -> bool:
             try:
@@ -290,6 +311,9 @@ class G6Device:
                             If set to true, no data is sent to the G6!
             :param debug: Print communication data with the G6 device to the console.
             """
+            if self.__held is not None:
+                self.__write_lines(self.__held, hid_data_list, dry_run=dry_run, debug=debug)
+                return
             try:
                 print(f"Opening the device '{self.__device_path}' ...")
                 h = hid.device()
@@ -309,44 +333,7 @@ class G6Device:
                     if not dry_run:
                         h.set_nonblocking(1)
 
-                    # Convert objects to hex_lines
-                    payload_hex_lines = [hid_data.__str__() for hid_data in hid_data_list]
-
-                    # Validate all hex_lines
-                    regex_pattern = re.compile(PAYLOAD_HEX_LINE_PATTERN)
-                    for hex_line in payload_hex_lines:
-                        if not regex_pattern.fullmatch(hex_line):
-                            raise ValueError(
-                                f"The following hex_line is part of the payload, but it did not match the expected regex pattern! "
-                                f"Pattern: '{PAYLOAD_HEX_LINE_PATTERN}'; "
-                                f"Hex-Line: '{hex_line}'")
-
-                    print("Sending HID data to G6 ...")
-                    for hex_line in payload_hex_lines:
-                        # Prepend an additional zero byte as report_id to the hex_line. Otherwise, the first byte from the actual
-                        # 64 byte payload is cut off, since it is interpreted as report_id and thus, not sent to the device.
-                        hex_line = '00' + hex_line
-
-                        # Convert the hex string to a list of integers
-                        integer_list = [int(hex_line[i:i + 2], 16) for i in range(0, len(hex_line), 2)]
-
-                        # send the data to the device
-                        if debug:
-                            print(hex_line)
-                        if dry_run:
-                            print('This is a dry run. No data has been sent to the G6!')
-                        else:
-                            h.write(integer_list)
-
-                        # read back the response
-                        if not dry_run:
-                            while True:
-                                response = h.read(64)
-                                if response and debug:
-                                    print(f"Response: {response}")
-                                else:
-                                    break
-                    print("Sending HID data to G6: ok.")
+                    self.__write_lines(h, hid_data_list, dry_run=dry_run, debug=debug)
                 finally:
                     if not dry_run:
                         print("Closing the device ...")
@@ -363,6 +350,47 @@ class G6Device:
                 print(
                     '\nIf the file already exists, it might not be used by the kernel. Try to reload the configuration with:')
                 print("`sudo udevadm trigger`")
+
+        @staticmethod
+        def __write_lines(h, hid_data_list: list[UsbHidDataFragment], dry_run: bool, debug: bool) -> None:
+            # Convert objects to hex_lines
+            payload_hex_lines = [hid_data.__str__() for hid_data in hid_data_list]
+
+            # Validate all hex_lines
+            regex_pattern = re.compile(PAYLOAD_HEX_LINE_PATTERN)
+            for hex_line in payload_hex_lines:
+                if not regex_pattern.fullmatch(hex_line):
+                    raise ValueError(
+                        f"The following hex_line is part of the payload, but it did not match the expected regex pattern! "
+                        f"Pattern: '{PAYLOAD_HEX_LINE_PATTERN}'; "
+                        f"Hex-Line: '{hex_line}'")
+
+            print("Sending HID data to G6 ...")
+            for hex_line in payload_hex_lines:
+                # Prepend an additional zero byte as report_id to the hex_line. Otherwise, the first byte from the actual
+                # 64 byte payload is cut off, since it is interpreted as report_id and thus, not sent to the device.
+                hex_line = '00' + hex_line
+
+                # Convert the hex string to a list of integers
+                integer_list = [int(hex_line[i:i + 2], 16) for i in range(0, len(hex_line), 2)]
+
+                # send the data to the device
+                if debug:
+                    print(hex_line)
+                if dry_run:
+                    print('This is a dry run. No data has been sent to the G6!')
+                else:
+                    h.write(integer_list)
+
+                # read back the response
+                if not dry_run:
+                    while True:
+                        response = h.read(64)
+                        if response and debug:
+                            print(f"Response: {response}")
+                        else:
+                            break
+            print("Sending HID data to G6: ok.")
 
     def __init__(self, audio_interface: AudioInterface, hid_interface: HidInterface, dry_run: bool, debug: bool):
         self.__audio_interface = audio_interface
@@ -395,6 +423,10 @@ class G6Device:
     def send_hid_data_to_device(self, hid_data_list: list[UsbHidDataFragment]) -> None:
         self.__hid_interface.send_hid_data_to_device(hid_data_list=hid_data_list, dry_run=self.__dry_run,
                                                      debug=self.__debug)
+
+    def hid_held_open(self):
+        """Context manager: keep the HID interface open for a burst of sends."""
+        return self.__hid_interface.held_open(dry_run=self.__dry_run)
 
 
 def list_all_hid_devices():

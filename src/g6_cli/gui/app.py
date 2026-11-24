@@ -10,6 +10,7 @@ import platform
 import queue
 import subprocess
 import threading
+from tkinter import filedialog
 from datetime import datetime
 from typing import Optional
 
@@ -17,7 +18,7 @@ import customtkinter as ctk
 
 from g6_cli.g6_status import DAC_FILTER_LABELS, DeviceStatus, read_status
 from g6_cli.gui import controls as C
-from g6_cli.gui.runner import CommandRunner, RunnerOptions
+from g6_cli.gui.runner import CommandRunner, EffectProcess, RunnerOptions
 
 WARN_BG = ('#fff3cd', '#3d3000')
 WARN_FG = ('#7a5500', '#ffcc44')
@@ -37,6 +38,11 @@ LABEL_W = 230
 def _on_off(value: Optional[bool]) -> str:
     return '?' if value is None else ('On' if value else 'Off')
 
+
+# GUI label -> --lighting-effect value
+EFFECT_LABELS = {'Pulsate': 'pulsate', 'Cycle': 'cycle', 'Music reactive': 'music'}
+EFFECT_IDLE = ('Not running. The G6 stores no effect, so this window keeps it running; '
+               'pulsate and music use the colour above.')
 
 LAYOUT_UNKNOWN = 'Current layout: not readable here (Windows reads it from the speaker setup).'
 
@@ -113,6 +119,8 @@ class G6GUI(ctk.CTk):
 
         self._runner = CommandRunner(log=self._log, ask_password=self._ask_password_threadsafe,
                                      is_linux=self._is_linux)
+        self._effect = EffectProcess(log=self._log)
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
 
         self._build_chrome()
         self.after(0, lambda: self._ensure_tab('Playback'))
@@ -248,6 +256,7 @@ class G6GUI(ctk.CTk):
         self.run(C.SPEAKER_LAYOUT_FLAGS[(output, layout)], claim=True)
 
     def _set_rgb_enabled(self, enabled: bool):
+        self._stop_effect(restore=False)
         if enabled:
             self._apply_rgb()
         else:
@@ -255,8 +264,47 @@ class G6GUI(ctk.CTk):
 
     def _apply_rgb(self):
         self._update_preview()
+        self._stop_effect(restore=False)
         self.run('--lighting-rgb', self._r.get(), self._g.get(), self._b.get(),
                  on_success=lambda: self._set_state(rgb_enabled=True))
+
+    def _start_effect(self):
+        effect = EFFECT_LABELS[self._effect_name.get()]
+        args = ['--lighting-effect', effect, '--lighting-rgb', self._r.get(), self._g.get(), self._b.get()]
+        if effect == 'music' and self._effect_cycle.get():
+            args = args[:2]  # no colour: music cycles through the colours
+        try:
+            period = float(self._effect_period.get())
+        except ValueError:
+            period = 0
+        if period > 0:
+            args += ['--lighting-effect-period', period]
+        if self._dry_run.get():
+            args += ['--lighting-effect-duration', 1]
+        self._effect.start(args, dry_run=self._dry_run.get())
+        self._effect_state.set(f'Running: {self._effect_name.get()}')
+        if not self._dry_run.get():
+            self._set_state(rgb_enabled=True)
+
+    def _stop_effect(self, restore: bool = True):
+        """Stop a running effect; with ``restore``, put the static colour (or 'off') back."""
+        if not self._effect.stop():
+            return
+        if hasattr(self, '_effect_state'):
+            self._effect_state.set(EFFECT_IDLE)
+        if restore:
+            if self._vars.get('rgb') is not None and not self._vars['rgb'].get():
+                self.run('--lighting-disable')
+            else:
+                self.run('--lighting-rgb', self._r.get(), self._g.get(), self._b.get())
+
+    def _on_close(self):
+        if self._effect.running:
+            self._effect.stop()
+            # terminated mid-frame: leave a defined state behind (synchronously, the window is going away)
+            rgb = (self._r.get(), self._g.get(), self._b.get()) if hasattr(self, '_r') else (255, 0, 0)
+            self._runner.run([['--lighting-rgb', *rgb]], self._runner_options())
+        self.destroy()
 
     def _set_ring_enabled(self, enabled: bool):
         self.run('--lighting-volume-ring', 'Enabled' if enabled else 'Disabled',
@@ -594,6 +642,24 @@ class G6GUI(ctk.CTk):
         ctk.CTkFrame(s, height=1, fg_color=('gray65', 'gray38')).pack(fill='x', padx=10, pady=(10, 5))
         self._switch(s, 'Volume Ring Light', 'ring', bool(self._status.ring_enabled), self._set_ring_enabled)
 
+        fx = self._section(sf, 'Lighting Effects', badge='[HID, runs on this PC]')
+        row = self._row(fx, 'Effect:')
+        self._effect_name = ctk.StringVar(value=next(iter(EFFECT_LABELS)))
+        ctk.CTkOptionMenu(row, values=list(EFFECT_LABELS), variable=self._effect_name, width=160
+                          ).pack(side='left', padx=4)
+        ctk.CTkButton(row, text='Start', width=70, command=self._start_effect).pack(side='left', padx=4)
+        ctk.CTkButton(row, text='Stop', width=70, fg_color='transparent', border_width=1,
+                      command=self._stop_effect).pack(side='left', padx=4)
+        row = self._row(fx, 'Seconds per round:')
+        self._effect_period = ctk.StringVar(value='')
+        ctk.CTkEntry(row, textvariable=self._effect_period, width=70, placeholder_text='default'
+                     ).pack(side='left', padx=4)
+        self._effect_cycle = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(row, text='Music: cycle colours', variable=self._effect_cycle).pack(side='left', padx=8)
+        self._effect_state = ctk.StringVar(value=EFFECT_IDLE)
+        ctk.CTkLabel(fx, textvariable=self._effect_state, text_color=('gray45', 'gray70'),
+                     font=ctk.CTkFont(size=11)).pack(anchor='w', padx=10, pady=(2, 8))
+
     def _build_tab_system(self, sf):
         info = self._section(sf, 'Platform')
         ctk.CTkLabel(info, anchor='w', justify='left', font=ctk.CTkFont(size=11), text=(
@@ -608,6 +674,16 @@ class G6GUI(ctk.CTk):
                       ).pack(fill='x', padx=10, pady=2)
         ctk.CTkButton(util, text='Clear Console', anchor='w', command=self._clear_console
                       ).pack(fill='x', padx=10, pady=2)
+
+        prof = self._section(sf, 'Profiles', badge='[HID]')
+        ctk.CTkLabel(prof, anchor='w', justify='left', font=ctk.CTkFont(size=11), wraplength=520, text=(
+            "Save the G6's sound settings (SBX, EQ, modes, filter, mic effects, lights on/off) to a file and apply "
+            'them again later. Not saved: the output, the RGB colour, volumes.')).pack(padx=10, pady=(2, 6),
+                                                                                         anchor='w')
+        ctk.CTkButton(prof, text='Save Profile…', anchor='w', command=self._save_profile
+                      ).pack(fill='x', padx=10, pady=2)
+        ctk.CTkButton(prof, text='Load Profile…', anchor='w', command=self._load_profile
+                      ).pack(fill='x', padx=10, pady=(2, 8))
 
         if not self._is_linux:
             return
@@ -640,6 +716,17 @@ class G6GUI(ctk.CTk):
         ctk.CTkButton(claim, text='Claim & Release', fg_color=WARN_BG, text_color=WARN_FG,
                       hover_color=('#ffe080', '#5a4800'), command=lambda: self.run('--claim-and-release')
                       ).pack(anchor='w', padx=10, pady=(0, 8))
+
+    def _save_profile(self):
+        path = filedialog.asksaveasfilename(parent=self, title='Save G6 profile', defaultextension='.json',
+                                            filetypes=[('G6 profile', '*.json')])
+        if path:
+            self.run('--profile-save', path)
+
+    def _load_profile(self):
+        path = filedialog.askopenfilename(parent=self, title='Load G6 profile', filetypes=[('G6 profile', '*.json')])
+        if path:
+            self.run('--profile-load', path, on_success=self._refresh_status_async)
 
     def _update_preview(self):
         if hasattr(self, '_preview'):

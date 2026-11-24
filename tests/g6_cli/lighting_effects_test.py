@@ -90,7 +90,7 @@ class FakeClock:
 def test_run_for_duration_then_static_colour():
     api, clock = FakeApi(), FakeClock()
     n = run_lighting_effect(api, 'pulsate', rgb=(0, 0, 255), duration=1.0, clock=clock, sleep=clock.sleep)
-    assert n == round(1.0 / FRAME_INTERVAL_S)
+    assert abs(n - 1.0 / FRAME_INTERVAL_S) <= 1
     assert api.static == [(0, 0, 255)]
     assert api.frames[0] == (0, 0, 255, 0)
 
@@ -104,7 +104,7 @@ def test_ctrl_c_restores_static_colour():
 def test_dry_run_sends_one_period_without_waiting():
     api = FakeApi()
     run_lighting_effect(api, 'cycle', period=1.0, dry_run=True, sleep=lambda s: pytest.fail('slept'))
-    assert len(api.frames) == round(1.0 / FRAME_INTERVAL_S)
+    assert abs(len(api.frames) - 1.0 / FRAME_INTERVAL_S) <= 1
 
 
 def test_bad_period():
@@ -117,4 +117,53 @@ def test_cli_dry_run(capsys):
               '--lighting-effect-duration', '0.1'])
     out = capsys.readouterr().out
     assert '005a3a090a0003010100ff00' in out  # first pulsate frame: blue at brightness 0
-    assert '005a3a090a000301010dff00' in out
+    assert '005a3a090a0003010111ff00' in out  # third frame (t = 2/30 s): brightness 0x11
+
+
+# --- music ---
+
+from g6_cli.g6_spec.lighting_effects import LevelFollower, level_to_brightness  # noqa: E402
+
+
+@pytest.mark.parametrize('peak,expected', [(0, 0.0), (1.0, 1.0), (2.0, 1.0), (10 ** (-45 / 20), 0.0),
+                                           (10 ** (-22.5 / 20), 0.5), (1e-9, 0.0)])
+def test_level_to_brightness(peak, expected):
+    assert level_to_brightness(peak) == pytest.approx(expected, abs=1e-9)
+
+
+def test_level_follower_attack_and_decay():
+    f = LevelFollower(decay_s=0.25)
+    assert f.update(0.8, 0.033) == 0.8          # instant attack
+    after = f.update(0.0, 0.25)                  # one time constant later
+    assert after == pytest.approx(0.8 / 2.718281828, rel=1e-6)
+    assert f.update(0.9, 0.033) == 0.9
+
+
+def test_music_frame_colour():
+    assert effect_frame('music', 0, 12, (0, 0, 255), 0.5) == (0, 0, 255, 128)
+    assert effect_frame('music', 0, 12, None, 1.0) == (255, 0, 0, 255)   # no colour: wheel
+    assert effect_frame('music', 4, 12, None, 1.0) == (0, 0, 255, 255)
+    assert effect_frame('music', 0, 12, None, None)[3] == 0
+
+
+def test_run_music_follows_meter():
+    levels = iter([1.0, 0.0, 0.0, 0.0] + [0.0] * 100)
+    api, clock = FakeApi(), FakeClock()
+    run_lighting_effect(api, 'music', rgb=None, duration=0.2, clock=clock, sleep=clock.sleep,
+                        meter=lambda: next(levels))
+    brightness = [f[3] for f in api.frames]
+    assert brightness[0] == 255 and brightness[1] < 255 and brightness[2] < brightness[1]  # beat, then fade
+    assert api.static == [(255, 0, 0)]
+
+
+def test_music_without_meter_errors(monkeypatch):
+    import g6_cli.g6_os_audio as oa
+    monkeypatch.setattr(oa, 'open_output_meter', lambda: None)
+    with pytest.raises(ValueError, match='only readable on Windows'):
+        run_lighting_effect(FakeApi(), 'music', rgb=None)
+
+
+def test_cli_music_dry_run(capsys):
+    cli_main(['--dry-run', '--debug', '--lighting-effect', 'music', '--lighting-effect-duration', '0.1'])
+    out = capsys.readouterr().out
+    assert '005a3a090a0003010100' in out  # silence: brightness 0

@@ -15,13 +15,17 @@ from g6_cli.g6_spec import (
     SmartVolumeSpecialHex,
     BOTH_CHANNELS,
 )
+from g6_cli.g6_profile import load_profile_argv, save_profile
 from g6_cli.g6_spec.decoder import DecoderMode
 from g6_cli.g6_spec.equalizer import EQ_BAND_FREQS
+from g6_cli.g6_spec.eq_presets import EQ_PRESETS, eq_preset_values, find_eq_preset
 from g6_cli.g6_spec.lighting_effects import (
     DEFAULT_PERIOD_S as LIGHTING_EFFECT_PERIOD,
     EFFECTS as LIGHTING_EFFECTS,
     FRAME_INTERVAL_S as LIGHTING_FRAME_INTERVAL,
+    LevelFollower,
     effect_frame,
+    level_to_brightness,
 )
 from g6_cli.g6_spec.modes import ProcessingMode
 from g6_cli.g6_spec.recording import MicrophoneEqualizerPreset
@@ -64,7 +68,7 @@ def _decoder_mode_from_cli(value: str) -> DecoderMode:
 
 # Arguments that only modify how an action is executed; they are not an action on their own.
 _NON_ACTION_ARGS = {'dry_run', 'debug', 'json', 'reload_audio_services_no_sudo', 'lighting_effect_period',
-                    'lighting_effect_duration'}
+                    'lighting_effect_duration', 'eq_preset_output'}
 
 
 def has_action(args: argparse.Namespace) -> bool:
@@ -200,10 +204,12 @@ def parse_cli_args(argv: list[str] | None = None):
                                     help='Animate the RGB light from this computer, like SoundBlaster Command does '
                                          '(the G6 stores no effect). Runs in the foreground until Ctrl+C or '
                                          '--lighting-effect-duration, then leaves the static colour. Pulsate uses '
-                                         'the --lighting-rgb colour (default red).')
+                                         'the --lighting-rgb colour (default red). Music follows the level of what '
+                                         'the G6 plays (Windows), in the --lighting-rgb colour or a slow colour '
+                                         'cycle without one.')
     lighting_hid_group.add_argument('--lighting-effect-period', required=False, type=float, metavar='SECONDS',
                                     help='Seconds per round: pulsate dark-bright-dark (default 2), cycle once '
-                                         'around the colour wheel (default 6).')
+                                         'around the colour wheel (default 6), music colour cycle (default 12).')
     lighting_hid_group.add_argument('--lighting-effect-duration', required=False, type=float, metavar='SECONDS',
                                     help='Stop the effect after this many seconds (default: run until Ctrl+C).')
 
@@ -433,6 +439,21 @@ def parse_cli_args(argv: list[str] | None = None):
     eq_hid_group.add_argument('--eq-band', required=False, nargs=2, action='append', metavar=('FREQ', 'DB'),
                               help=f'Set one band, e.g. --eq-band 1k -2.5 (repeatable). '
                                    f'FREQ: {", ".join(EQ_BAND_FREQS)}.')
+    eq_hid_group.add_argument('--eq-preset', required=False, type=str, metavar='NAME',
+                              help='Apply one of SoundBlaster Command\'s presets (preamp and all ten bands), e.g. '
+                                   '"Rock" or "hip hop"; --eq-preamp and --eq-band given too are applied after it. '
+                                   'Uses the curve for the current output (read from the G6). Names: '
+                                   + ', '.join(EQ_PRESETS) + '.')
+    profile_group = parser.add_argument_group(
+        'Profiles', description="Save the G6's sound settings to a JSON file and apply them again (HID settings only: "
+                               "no output switch, RGB colour or volumes).")
+    profile_group.add_argument('--profile-save', required=False, type=str, metavar='FILE',
+                               help='Read the current settings from the G6 and write them to FILE.')
+    profile_group.add_argument('--profile-load', required=False, type=str, metavar='FILE',
+                               help='Apply the settings in FILE. Other settings given in the same command are applied '
+                                    'after it.')
+    eq_hid_group.add_argument('--eq-preset-output', required=False, type=str, choices=['Speakers', 'Headphones'],
+                              help='Use the preset\'s curve for this output instead of the current one.')
 
     # parse args and verify
     args = parser.parse_args(argv)
@@ -449,6 +470,11 @@ def parse_cli_args(argv: list[str] | None = None):
         print(message)
         parser.print_help()
         raise ValueError(message)
+    if args.eq_preset is not None:
+        try:
+            args.eq_preset = find_eq_preset(args.eq_preset)
+        except ValueError as e:
+            parser.error(str(e))
 
     return args
 
@@ -510,6 +536,18 @@ def device_toggle_output(api: G6Api):
         api.playback_toggle_to_headphones()
     else:
         api.playback_toggle_to_speakers()
+
+
+def _current_output(dry_run: bool) -> str:
+    """'Speakers' or 'Headphones' as the G6 reports it (HID read only); Headphones when it can't be read."""
+    if not dry_run:
+        try:
+            output = read_status().output
+        except (IOError, OSError, ValueError):
+            output = None
+        if output in ('Speakers', 'Headphones'):
+            return output
+    return 'Headphones'
 
 
 def device_set_output(api: G6Api, toggle_state: str):
@@ -750,6 +788,11 @@ def device_set_audio_effects(api: G6Api, args: argparse.Namespace):
         # equalizer
         if args.eq is not None:
             api.equalizer_enabled(enable=to_bool(args.eq))
+        if args.eq_preset is not None:
+            preamp, bands = eq_preset_values(args.eq_preset, args.eq_preset_output or _current_output(args.dry_run))
+            api.equalizer_preamp(db=preamp)
+            for freq, db in bands.items():
+                api.equalizer_band(freq=freq, db=db)
         if args.eq_preamp is not None:
             api.equalizer_preamp(db=args.eq_preamp)
         for freq, db in args.eq_band or []:
@@ -850,6 +893,15 @@ def format_status(status: DeviceStatus, as_json: bool) -> str:
     return '\n'.join(f'{label:<13} {fmt(value)}' for label, value in rows)
 
 
+def _only_profile_save(args: argparse.Namespace) -> bool:
+    saved = args.profile_save
+    args.profile_save = None
+    try:
+        return not has_action(args)
+    finally:
+        args.profile_save = saved
+
+
 def _only_status_requested(args: argparse.Namespace) -> bool:
     saved = args.status
     args.status = False
@@ -859,9 +911,34 @@ def _only_status_requested(args: argparse.Namespace) -> bool:
         args.status = saved
 
 
+def _without_option(argv: list[str], option: str) -> list[str]:
+    """``argv`` without ``option VALUE`` / ``option=VALUE``."""
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+        elif a == option:
+            skip = True
+        elif not a.startswith(option + '='):
+            out.append(a)
+    return out
+
+
 def main(argv: list[str] | None = None):
     # parse CLI arguments
     args = parse_cli_args(argv)
+
+    # profiles: save first (so "--profile-save old.json --profile-load new.json" keeps a backup), then expand the
+    # loaded profile into ordinary arguments, ahead of the ones given on the command line
+    if args.profile_save is not None:
+        profile = save_profile(args.profile_save, read_status())
+        print(f"Saved {len(profile['settings'])} settings to {args.profile_save}")
+    if args.profile_load is not None:
+        rest = _without_option(_without_option(sys.argv[1:] if argv is None else list(argv), '--profile-load'),
+                               '--profile-save')
+        args = parse_cli_args(load_profile_argv(args.profile_load) + rest)
+    elif args.profile_save is not None and _only_profile_save(args):
+        return
 
     # read-only status query (HID only, no USB claim needed)
     if args.status:
@@ -878,43 +955,62 @@ def main(argv: list[str] | None = None):
 
     # host-side lighting effect: runs last, in the foreground
     if args.lighting_effect is not None:
-        run_lighting_effect(api, args.lighting_effect, rgb=tuple(args.lighting_rgb or (255, 0, 0)),
+        default_rgb = None if args.lighting_effect == 'music' else (255, 0, 0)
+        run_lighting_effect(api, args.lighting_effect,
+                            rgb=tuple(args.lighting_rgb) if args.lighting_rgb else default_rgb,
                             period=args.lighting_effect_period, duration=args.lighting_effect_duration,
                             dry_run=args.dry_run, quiet=not args.debug)
 
 
 def run_lighting_effect(api, effect: str, rgb=(255, 0, 0), period: float | None = None,
                         duration: float | None = None, dry_run: bool = False, quiet: bool = False,
-                        clock=time.monotonic, sleep=time.sleep) -> int:
+                        clock=time.monotonic, sleep=time.sleep, meter=None) -> int:
     """
-    Stream effect frames until ``duration`` runs out or Ctrl+C, then set the static colour again.
+    Stream effect frames until ``duration`` runs out or Ctrl+C, then set the static colour again (red if ``rgb``
+    is None). ``meter`` (music only) returns the output peak 0..1; by default the G6's Windows output meter.
     A dry run sends one period's frames without waiting. Returns the number of frames sent.
-    The transport opens the device for every frame, so about 10 frames/s get through; the animation follows the
-    clock, so only the smoothness suffers. ``quiet`` drops the transport's per-frame log lines.
+    The HID handle stays open for the whole run (opening it per frame caps the stream at ~10 frames/s).
+    ``quiet`` drops the transport's per-frame log lines.
     """
     period = period or LIGHTING_EFFECT_PERIOD[effect]
     if period <= 0:
         raise ValueError(f'--lighting-effect-period must be > 0, got {period}')
+    follower = None
+    if effect == 'music':
+        if meter is None:
+            if dry_run:
+                meter = lambda: 0.0  # noqa: E731
+            else:
+                from g6_cli.g6_os_audio import open_output_meter
+                meter = open_output_meter()
+        if meter is None:
+            raise ValueError('--lighting-effect music needs the G6 output level, which is only readable on Windows')
+        follower = LevelFollower()
     if dry_run:
         duration = min(duration, period) if duration is not None else period
     elif duration is None:
         print(f'Lighting effect {effect} running, Ctrl+C to stop.', file=sys.stderr)
     frames = 0
+    held = getattr(api, 'hid_held_open', None)
     start = clock()
     try:
-        while True:
-            t = frames * LIGHTING_FRAME_INTERVAL if dry_run else clock() - start
-            if duration is not None and t >= duration:
-                break
-            with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
-                api.lighting_frame(*effect_frame(effect, t, period, rgb))
-            frames += 1
-            if not dry_run:
-                sleep(max(0.0, start + frames * LIGHTING_FRAME_INTERVAL - clock()))
+        with held() if held else contextlib.nullcontext():
+            while True:
+                t = frames * LIGHTING_FRAME_INTERVAL if dry_run else clock() - start
+                if duration is not None and t >= duration:
+                    break
+                level = None
+                if follower is not None:
+                    level = follower.update(level_to_brightness(meter()), LIGHTING_FRAME_INTERVAL)
+                with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
+                    api.lighting_frame(*effect_frame(effect, t, period, rgb, level))
+                frames += 1
+                if not dry_run:
+                    sleep(max(0.0, start + frames * LIGHTING_FRAME_INTERVAL - clock()))
     except KeyboardInterrupt:
         pass
     finally:
-        api.lighting_enable_set_rgb(*rgb)
+        api.lighting_enable_set_rgb(*(rgb or (255, 0, 0)))
     return frames
 
 

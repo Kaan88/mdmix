@@ -24,7 +24,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Optional
+from typing import Callable, Optional
 
 G6_NAME_MARKERS = ('BlasterX G6', 'Blaster X G6')
 
@@ -109,6 +109,20 @@ def read_mixer() -> Optional[dict]:
     mixer['monitoring'] = group_monitoring(read_monitoring() or [])
     mixer['speaker_layout'] = speaker_layout(read_speaker_mask())
     return mixer
+
+
+def open_output_meter() -> Optional[Callable[[], float]]:
+    """
+    A function returning the current peak level (0..1, linear) of what the G6 is playing, or None when that can't
+    be read here (Windows only: Core Audio's IAudioMeterInformation on the G6 playback endpoint). Read only.
+    """
+    if sys.platform != 'win32':
+        return None
+    win = _Windows()
+    meter = win.output_meter()
+    if meter is None:
+        return None
+    return lambda: float(meter.GetPeakValue())
 
 
 def read_speaker_mask() -> Optional[int]:
@@ -268,6 +282,15 @@ def _com():
             COMMETHOD([], HRESULT, 'GetLevel', (['in'], c_uint, 'ch'), (['out'], POINTER(c_float), 'l')),
         ]
 
+    class IAudioMeterInformation(IUnknown):
+        _iid_ = GUID('{C02216F6-8C67-4B5B-9D00-D008E73E0064}')
+        _methods_ = [
+            COMMETHOD([], HRESULT, 'GetPeakValue', (['out'], POINTER(c_float), 'p')),
+            COMMETHOD([], HRESULT, 'GetMeteringChannelCount', (['out'], POINTER(c_uint), 'c')),
+            COMMETHOD([], HRESULT, 'GetChannelsPeakValues', (['in'], c_uint, 'n'), (['in'], POINTER(c_float), 'p')),
+            COMMETHOD([], HRESULT, 'QueryHardwareSupport', (['out'], POINTER(DWORD), 'm')),
+        ]
+
     class IAudioMute(IUnknown):
         _iid_ = GUID('{DF45AEEA-B74A-4B6B-AFAD-2366B6AA012E}')
         _methods_ = [
@@ -398,6 +421,12 @@ class _Windows:
                     is_default=dev.GetId() == default,
                 ))
         return results
+
+    def output_meter(self):
+        """IAudioMeterInformation of the G6 playback endpoint, or None."""
+        for _name, dev in self._g6_devices(self.E_RENDER):
+            return self._activate(dev, self.c['IAudioMeterInformation'])
+        return None
 
     def speaker_mask(self) -> Optional[int]:
         VT_UI4 = 19

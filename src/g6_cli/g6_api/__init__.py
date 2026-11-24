@@ -268,6 +268,10 @@ class G6Api:
         hid_data_list = lighting_enable_set_rgb_spec(red=red, green=green, blue=blue)
         self.__device.send_hid_data_to_device(hid_data_list=hid_data_list)
 
+    def hid_held_open(self):
+        """Context manager: keep the HID interface open, for streaming many small writes (lighting effects)."""
+        return self.__device.hid_held_open()
+
     def lighting_frame(self, red: int, green: int, blue: int, brightness: int = 255) -> None:
         """One frame of a host-side lighting effect (see g6_spec.lighting_effects)."""
         self.__device.send_hid_data_to_device(hid_data_list=lighting_frame_spec(red, green, blue, brightness))

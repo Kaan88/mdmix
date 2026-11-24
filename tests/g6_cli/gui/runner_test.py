@@ -74,3 +74,44 @@ def test_steps_stop_at_first_failure(monkeypatch):
     monkeypatch.setattr(R.subprocess, 'run', r)
     assert not run_sync(make(False), [['--a'], ['--b']], R.RunnerOptions())
     assert len(r.calls) == 1
+
+
+class FakeProc:
+    def __init__(self, cmd, **kw):
+        self.cmd, self.kw, self.code, self.terminated = cmd, kw, None, False
+
+    def poll(self):
+        return self.code
+
+    def terminate(self):
+        self.terminated, self.code = True, 1
+
+    def wait(self, timeout=None):
+        return self.code
+
+    def kill(self):
+        self.code = -9
+
+
+def test_effect_process_start_stop():
+    logs, procs = [], []
+
+    def popen(cmd, **kw):
+        procs.append(FakeProc(cmd, **kw))
+        return procs[-1]
+
+    ep = R.EffectProcess(log=lambda t, k: logs.append((t, k)), popen=popen)
+    assert not ep.running and ep.stop() is False
+    ep.start(['--lighting-effect', 'cycle'], dry_run=True)
+    assert ep.running
+    assert procs[0].cmd[-3:] == ['--dry-run', '--lighting-effect', 'cycle']
+    ep.start(['--lighting-effect', 'pulsate'])  # restarting stops the old one first
+    assert procs[0].terminated and ep.running and '--dry-run' not in procs[1].cmd
+    assert ep.stop() is True and procs[1].terminated and not ep.running
+
+
+def test_effect_process_already_exited():
+    ep = R.EffectProcess(log=lambda t, k: None, popen=FakeProc)
+    ep.start(['--lighting-effect', 'cycle', '--lighting-effect-duration', '1'])
+    ep._proc.code = 0  # finished on its own
+    assert not ep.running and ep.stop() is False
