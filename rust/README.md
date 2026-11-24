@@ -6,6 +6,8 @@ phases 1 and 2 (the protocol and the command line) and the HID half of phase 3 (
 - `g6-proto`: packet builders, value ranges, EQ presets, lighting effects, status parsers. No I/O.
 - `g6-device`: the G6 over HID through `hidapi`. It finds interface 4 the way Python does, sends `00` + 64-byte
   reports, and runs the status queries (500 ms read timeout, as in Python). USB Audio Control isn't in it yet.
+- `g6-osaudio`: read-only volumes, mutes, speaker setup and output peak meter from Windows Core Audio (`None` on
+  other platforms). The only crate with `unsafe`.
 - `g6-cli`: the `g6` binary. Same flags as the Python CLI. Without `--dry-run` it uses the G6 over HID; settings
   that go over USB Audio Control (volumes, mutes, speaker layout, `--claim-and-release`) stop with an error.
 - `g6-testui`: a **throwaway** egui test harness for trying the port on a real G6 by hand. Every control writes at
@@ -54,4 +56,4 @@ safe:
 cargo run --release -- --status          # or --status --json
 ```
 
-`mixer` is always `null` until `g6-osaudio` exists.
+On Windows `--status` also shows the mixer (volumes, monitoring, speaker setup) from `g6-osaudio`; elsewhere `mixer` is `null`.

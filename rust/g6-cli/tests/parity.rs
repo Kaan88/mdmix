@@ -314,6 +314,69 @@ fn dry_run_output_matches_python() {
 }
 
 #[test]
+fn status_with_mixer_matches_python() {
+    use g6_cli::status_fmt::format_status_with_mixer;
+    use g6_osaudio::{EndpointVolume, Flow, TopologyControl, build_mixer};
+    let v = python_output();
+    let cases = v["mixer"].as_array().unwrap();
+    assert!(cases.len() >= 4);
+    for c in cases {
+        let name = c["name"].as_str().unwrap();
+        let endpoints: Vec<EndpointVolume> = c["endpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| EndpointVolume {
+                name: e["name"].as_str().unwrap().to_string(),
+                flow: match e["flow"].as_str().unwrap() {
+                    "playback" => Flow::Playback,
+                    _ => Flow::Recording,
+                },
+                level_db: e["level_db"].as_f64().unwrap(),
+                level_percent: e["level_percent"].as_i64().unwrap(),
+                muted: e["muted"].as_bool().unwrap(),
+                is_default: e["is_default"].as_bool().unwrap(),
+            })
+            .collect();
+        let controls: Vec<TopologyControl> = c["controls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| TopologyControl {
+                name: t["name"].as_str().unwrap().to_string(),
+                level_db: t["level_db"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|d| d.as_f64().unwrap())
+                    .collect(),
+                muted: t["muted"].as_bool(),
+            })
+            .collect();
+        let mask = c["mask"].as_u64().map(|m| m as u32);
+        let mixer = build_mixer(&endpoints, &controls, mask);
+        let status = status_from(&exchanges(&c["exchanges"]));
+        for (as_json, key) in [(false, "text"), (true, "json")] {
+            // run() prints the status with a trailing newline, like Python's print
+            let got = format_status_with_mixer(&status, Some(&mixer), as_json)
+                + "
+";
+            assert_eq!(got, c[key].as_str().unwrap(), "{name} {key}");
+        }
+    }
+}
+
+#[test]
+fn rounding_matches_python() {
+    use g6_osaudio::{round_percent, round2};
+    for r in python_output()["rounding"].as_array().unwrap() {
+        let x = r["value"].as_f64().unwrap();
+        assert_eq!(round_percent(x), r["percent"].as_i64(), "percent of {x}");
+        assert_eq!(round2(x), r["db"].as_f64().unwrap(), "db of {x}");
+    }
+}
+
+#[test]
 fn status_text_and_json_match_python() {
     let v = python_output();
     let entries = v["status"].as_array().unwrap();

@@ -9,6 +9,7 @@ use crate::CliError;
 use crate::hid_transport::HidTransport;
 use crate::transport::{DryRunTransport, Transport};
 use g6_device::{Hid, STATUS_NOT_FOUND};
+use g6_osaudio::Mixer;
 use g6_proto::status::DeviceStatus;
 
 /// Python's `TOGGLE_STATE_TEMP_FILE_NAME`.
@@ -24,6 +25,11 @@ pub trait Env {
     ) -> Result<Box<dyn Transport>, CliError>;
     /// Python's `read_status()` (HID reads only; it ignores `--dry-run` there too).
     fn read_status(&mut self) -> Result<DeviceStatus, CliError>;
+    /// Python's `read_mixer_safely()`: volumes from the OS audio stack, `None` when unavailable. Called for
+    /// `--status` only.
+    fn read_mixer(&mut self) -> Option<Mixer> {
+        None
+    }
     /// Where `--toggle-output` remembers the last state.
     fn toggle_state_path(&self) -> PathBuf;
     /// `G6Api.reload_alsa_and_pipewire`.
@@ -50,7 +56,7 @@ pub fn python_temp_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// The real system: the G6 over HID. The mixer readback and the output meter come with `g6-osaudio`.
+/// The real system: the G6 over HID. The mixer readback and the output meter come from `g6-osaudio`.
 pub struct SystemEnv {
     start: Instant,
 }
@@ -90,6 +96,10 @@ impl Env for SystemEnv {
         }
     }
 
+    fn read_mixer(&mut self) -> Option<Mixer> {
+        g6_osaudio::read_mixer()
+    }
+
     fn toggle_state_path(&self) -> PathBuf {
         python_temp_dir().join(TOGGLE_STATE_FILE_NAME)
     }
@@ -123,7 +133,7 @@ impl Env for SystemEnv {
     }
 
     fn output_meter(&mut self) -> Option<Box<dyn FnMut() -> f64>> {
-        // the Windows meter comes with g6-osaudio
-        None
+        let meter = g6_osaudio::open_output_meter()?;
+        Some(Box::new(move || meter.peak()))
     }
 }
