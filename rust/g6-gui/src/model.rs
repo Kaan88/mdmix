@@ -228,6 +228,11 @@ impl Model {
         match read {
             Ok(mut status) => {
                 facts::drop_direct_zeros(&mut status);
+                // The output is always one or the other: a read it is missing from (the G6 still settling after a
+                // switch) keeps the one known, rather than showing neither.
+                if status.output.is_none() {
+                    status.output = self.status.output.take();
+                }
                 self.status = status;
                 self.have_status = true;
                 self.conn = Conn::Connected;
@@ -351,5 +356,18 @@ mod tests {
         assert!(m.mixer.is_some());
         m.apply(Ok(s), None);
         assert!(m.mixer.is_none());
+    }
+
+    #[test]
+    fn a_read_without_the_output_keeps_the_one_known() {
+        let mut m = Model::starting();
+        let s = DeviceStatus {
+            firmware: Some("1".into()),
+            output: Some("Headphones".into()),
+            ..DeviceStatus::default()
+        };
+        m.apply(Ok(s.clone()), None);
+        m.apply(Ok(DeviceStatus { output: None, ..s }), None);
+        assert_eq!(m.status.output.as_deref(), Some("Headphones"));
     }
 }

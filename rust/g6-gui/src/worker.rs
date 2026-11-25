@@ -126,14 +126,33 @@ pub fn serve(dev: &mut dyn Device, q: &Queue) -> ReadResult {
             val: w.val,
             result: reports_of(&w.action).and_then(|r| dev.send(w, &r)),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let mut status = dev.read();
+    // Right after a write, an output switch above all, the G6 can leave a query unanswered while it settles. A
+    // read-back without the output is read again, a little later, a few times.
+    if !writes.is_empty() {
+        for _ in 0..SETTLE_TRIES {
+            if !matches!(&status, Ok(s) if s.output.is_none()) {
+                break;
+            }
+            thread::sleep(SETTLE_GAP);
+            status = dev.read();
+        }
+    }
     ReadResult {
         user: q.user,
-        status: dev.read(),
+        status,
         mixer: dev.mixer(),
         writes,
     }
 }
+
+/// How often, and how far apart, a read-back that came without the output is read again.
+const SETTLE_TRIES: usize = 3;
+#[cfg(not(test))]
+const SETTLE_GAP: std::time::Duration = std::time::Duration::from_millis(400);
+#[cfg(test)]
+const SETTLE_GAP: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// The UI end of the worker. The function given to `start` is called with every result, on the worker's thread; the
 /// window uses it to wake its loop.
@@ -281,5 +300,64 @@ mod tests {
         });
         assert!(reports_of(&usb).is_err());
         assert_eq!(reports_of(&Action::Eq(true)).unwrap().len(), 2);
+    }
+
+    /// A G6 that leaves the output unanswered for its first reads after a write.
+    struct Settling {
+        status: DeviceStatus,
+        quiet_reads: usize,
+        reads: usize,
+    }
+
+    impl Device for Settling {
+        fn send(&mut self, _w: &Write, _r: &[HidReport]) -> Result<(), String> {
+            self.status.output = Some("Headphones".into());
+            Ok(())
+        }
+        fn read(&mut self) -> Result<DeviceStatus, String> {
+            self.reads += 1;
+            let mut s = self.status.clone();
+            if self.reads <= self.quiet_reads {
+                s.output = None;
+            }
+            Ok(s)
+        }
+        fn mixer(&mut self) -> Option<MixerView> {
+            None
+        }
+    }
+
+    fn switch_to_headphones() -> Queue {
+        let mut q = Queue::default();
+        q.add(Cmd::Write(Write {
+            setting: Setting::Output,
+            val: Val::Int(1),
+            action: Action::Eq(true),
+        }));
+        q
+    }
+
+    #[test]
+    fn a_read_back_without_the_output_is_read_again() {
+        let mut dev = Settling {
+            status: sample::live_status(),
+            quiet_reads: 2,
+            reads: 0,
+        };
+        let r = serve(&mut dev, &switch_to_headphones());
+        assert_eq!(dev.reads, 3);
+        assert_eq!(r.status.unwrap().output.as_deref(), Some("Headphones"));
+    }
+
+    #[test]
+    fn a_g6_that_never_answers_the_output_is_asked_only_a_few_times() {
+        let mut dev = Settling {
+            status: sample::live_status(),
+            quiet_reads: usize::MAX,
+            reads: 0,
+        };
+        let r = serve(&mut dev, &switch_to_headphones());
+        assert_eq!(dev.reads, 1 + SETTLE_TRIES);
+        assert!(r.status.unwrap().output.is_none());
     }
 }
