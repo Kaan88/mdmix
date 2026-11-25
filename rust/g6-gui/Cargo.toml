@@ -17,9 +17,9 @@ g6-device = { path = "../g6-device" }
 g6-osaudio = { path = "../g6-osaudio" }
 # The toolkit (markdown-shared-rs), pinned to one commit like mdview and mdedit pin it. For work on both
 # sides at once, a local [patch] goes in `.cargo/config.local.toml`, which git ignores.
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6064dfb9895481b49110a0bd133f6f82c1d949e9" }
-mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6064dfb9895481b49110a0bd133f6f82c1d949e9" }
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6064dfb9895481b49110a0bd133f6f82c1d949e9" }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6017fcdec96863ff305a3c33121e9d2e19c013ac" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6017fcdec96863ff305a3c33121e9d2e19c013ac" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "6017fcdec96863ff305a3c33121e9d2e19c013ac" }
 
 [target.'cfg(windows)'.dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
