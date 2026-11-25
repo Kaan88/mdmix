@@ -12,7 +12,7 @@ use mdshared_ui::glyph;
 
 use crate::facts::{self, DASH};
 use crate::icons;
-use crate::intent::{SWATCHES, Setting};
+use crate::intent::{self, SWATCHES, Setting};
 use crate::kit::{
     self, Bind, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, Why, dd, dimmed, live_seg, row, seg,
     seg_sm, value,
@@ -744,24 +744,38 @@ fn lighting(m: &Model) -> Vec<Card<'static>> {
     let on = s.rgb_enabled;
     let ring_on = s.ring_enabled;
     let colour = m.colour;
-    let colour_name = colour
-        .and_then(|c| SWATCHES.iter().find(|(_, rgb)| *rgb == c))
-        .map_or(DASH, |(n, _)| *n);
-    let names: Vec<&str> = SWATCHES.iter().map(|(n, _)| *n).collect();
+    let hex = colour.map_or(DASH.to_string(), intent::hex_of);
     // Turning the light on sends a colour; with none set from here, there is none to send.
     let head_bind = if on != Some(true) && colour.is_none() {
         Bind::Off(Why::NoColour)
     } else {
         live(Setting::Lighting)
     };
+    let quick: Vec<[u8; 3]> = SWATCHES.iter().map(|(_, rgb)| *rgb).collect();
     vec![
         Card::new(
             "Lighting",
             vec![
-                row("Colour", dd(colour_name, &names, live(Setting::Colour)))
-                    .help("Turns the light on in this colour. The G6 can't be asked which colour it shows, so this is the one set from here.")
-                    .item(),
+                row(
+                    "Colour",
+                    Ctl::Colour {
+                        rgb: colour,
+                        hex,
+                        bind: live(Setting::Colour),
+                    },
+                )
+                .help("Opens a colour picker; the light turns on in the colour picked. The G6 can't be asked which colour it shows, so this is the one set from here.")
+                .item(),
                 toggle_row("Volume ring light", ring_on, live(Setting::VolumeRing)).help("The LED indicator round the knob.").item(),
+                row(
+                    "Quick picks",
+                    Ctl::Swatches {
+                        colours: quick,
+                        bind: live(Setting::Colour),
+                    },
+                )
+                .help("Sets the colour at once, without the picker.")
+                .item(),
             ],
         )
         .head(on, head_bind)

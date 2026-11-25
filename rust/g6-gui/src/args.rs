@@ -21,6 +21,7 @@ USAGE
         --backdrop <off|mica|acrylic> the frosted chrome over a sample wallpaper (default mica, the app's default)
         --desk                       the desktop round the window, with its corners and shadow
         --dialog <appearance|device> the settings dialog over the page
+        --picker                     the Lighting page's colour picker open over it
         --out <file.png>             default: target/g6-gui-shots/<name>.png
         --size <WxH>                 logical px (default 1180x780)
         --scale <n>                  device pixels per logical px (default 1)
@@ -39,6 +40,8 @@ pub struct ShotArgs {
     pub sample: Sample,
     /// 0 Appearance, 1 Device.
     pub dialog: Option<usize>,
+    /// The Lighting page's colour picker, open.
+    pub picker: bool,
     pub out: Option<PathBuf>,
     pub size: (u32, u32),
     pub scale: f32,
@@ -54,6 +57,7 @@ impl ShotArgs {
             backdrop: Backdrop::Mica,
             sample: Sample::Live,
             dialog: None,
+            picker: false,
             out: None,
             size: (1180, 780),
             scale: 1.0,
@@ -83,6 +87,9 @@ impl ShotArgs {
             } else {
                 "dialog-device-"
             };
+        }
+        if self.picker {
+            s += "picker-";
         }
         s += self.page.key();
         s += if self.dark { "-dark" } else { "-light" };
@@ -133,6 +140,11 @@ pub fn parse(args: &[String]) -> Result<Mode, String> {
                 shot.as_mut()
                     .ok_or_else(|| format!("{a} goes after --shot <page> <theme>"))?
                     .desk = true
+            }
+            "--picker" => {
+                shot.as_mut()
+                    .ok_or_else(|| format!("{a} goes after --shot <page> <theme>"))?
+                    .picker = true
             }
             "--shots" => shots = Some(PathBuf::from(value(&mut it, a)?)),
             "--backdrop" | "--sample" | "--dialog" | "--out" | "--size" | "--scale" => {

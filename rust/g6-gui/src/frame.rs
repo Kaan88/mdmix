@@ -29,6 +29,12 @@ pub const SIDE_W: f32 = 236.0;
 const PAD: f32 = 20.0;
 const NAV_H: f32 = 34.0;
 
+/// The part of the window a flyout may use: everything under the title row. A menu and the colour picker are placed
+/// in it, so neither leaves the window at any edge.
+pub fn popup_area(size: (f32, f32)) -> Rect {
+    Rect::new(0.0, TITLE_H, size.0.max(0.0), (size.1 - TITLE_H).max(0.0))
+}
+
 /// What a frame is drawn from.
 pub struct FrameIn<'a> {
     pub model: &'a Model,
@@ -76,6 +82,7 @@ pub fn draw_frame(
         leaving,
         tip,
         menu,
+        pick,
     } = fx;
     let mut env = Env::new(pal, input.model, input.hover, input.pressed, anim);
     env.dragging = input.dragging;
@@ -125,12 +132,30 @@ pub fn draw_frame(
     }
     // A dropdown's choices, over the page and the chrome.
     if let Some(m) = menu.as_mut().filter(|_| dialog_is_none) {
-        m.draw_in(p, &pal, Rect::new(0.0, TITLE_H, w, (h - TITLE_H).max(0.0)));
+        m.draw_in(p, &pal, popup_area((w, h)));
+    }
+    // The colour picker and its card: over the page and the chrome, under the dialog and the toast. It is anchored to
+    // the Colour row the page has just recorded, and placed inside the window every frame, so a resize or a scroll
+    // under it moves it along.
+    let picking = pick.is_some() && dialog_is_none && leaving.is_none();
+    if let Some(pk) = pick.as_mut().filter(|_| picking) {
+        if let Some(anchor) = env.hits.rect_of(Hit::Open(Setting::Colour)) {
+            pk.set_anchor(anchor);
+        }
+        let card = pk.place(popup_area((w, h)));
+        let t = env
+            .anim
+            .presence("colour-picker", true, fluent::ENTER, fluent::FADE);
+        if t > 0.0 {
+            pk.draw(p, &pal, t);
+            // Nothing under the card is there to be hit while it is open.
+            env.hits.add(Hit::Blocked, card);
+        }
     }
     // A device control that writes nothing says why, under the pointer; the tip fades in and out.
     let over = input
         .pointer
-        .filter(|_| dialog_is_none && leaving.is_none() && menu.is_none())
+        .filter(|_| dialog_is_none && leaving.is_none() && menu.is_none() && !picking)
         .and_then(|(x, y)| match env.hits.at_rect(x, y) {
             Some((Hit::Inert(why), r)) => Some((r, why)),
             _ => None,

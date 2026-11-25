@@ -14,15 +14,23 @@ use mdshared_ui::theme::{DARK, LIGHT};
 
 use crate::args::ShotArgs;
 use crate::dialog;
-use crate::frame::{FrameIn, draw_frame};
+use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
 use crate::fx::Fx;
+use crate::intent::Setting;
+use crate::kit::Hit;
 use crate::model::Page;
+use crate::pick::{self, ColourPick};
 use crate::prefs::{Prefs, Theme};
 use crate::sample::Sample;
+use mdshared_ui::gfx::Rgb;
 
 /// Renders a shot to a bitmap.
 pub fn render(args: &ShotArgs) -> Bitmap {
-    let model = args.sample.model();
+    let mut model = args.sample.model();
+    if args.picker && model.colour.is_none() {
+        // The picker shot shows a colour set from here: the G6 can't be asked which colour it shows.
+        model.colour = Some([0, 200, 255]);
+    }
     let prefs = Prefs {
         theme: if args.dark { Theme::Dark } else { Theme::Light },
         backdrop: args.backdrop,
@@ -36,40 +44,41 @@ pub fn render(args: &ShotArgs) -> Bitmap {
         (h * args.scale).round() as u32,
     );
     let mut gfx = Gfx::new();
+    let mut fx = Fx::still();
     let mut form = args
         .dialog
         .map(|page| dialog::form_at(&prefs, &model, page));
-    let areas;
+    let input = FrameIn {
+        model: &model,
+        prefs: &prefs,
+        pal,
+        page: args.page,
+        size: (w, h),
+        scroll: 0.0,
+        maximized: false,
+        hover: None,
+        pointer: None,
+        pressed: None,
+        dragging: None,
+        frosted: args.backdrop != Backdrop::Off,
+    };
+    let mut areas;
     {
         let mut p = Painter::new(&mut bmp, &mut gfx, args.scale);
-        let input = FrameIn {
-            model: &model,
-            prefs: &prefs,
-            pal,
-            page: args.page,
-            size: (w, h),
-            scroll: 0.0,
-            maximized: false,
-            hover: None,
-            pointer: None,
-            pressed: None,
-            dragging: None,
-            frosted: args.backdrop != Backdrop::Off,
-        };
-        let out = draw_frame(&mut p, &input, form.as_mut(), &mut Fx::still());
-        areas = out
-            .chrome
-            .iter()
-            .map(|r| {
-                let d = p.dev_rect(*r);
-                (
-                    d.0.max(0) as usize,
-                    d.1.max(0) as usize,
-                    d.2.max(0) as usize,
-                    d.3.max(0) as usize,
-                )
-            })
-            .collect::<Vec<_>>();
+        let out = draw_frame(&mut p, &input, form.as_mut(), &mut fx);
+        areas = chrome_areas(&p, &out);
+        // The colour picker is placed by the row the frame just recorded, as the window places it on its next frame.
+        if args.picker
+            && let Some(anchor) = out.hits.rect_of(Hit::Open(Setting::Colour))
+        {
+            let original = Setting::Colour.current(&model);
+            let colour: Rgb = pick::rgb_or_fallback(original);
+            let mut pk = ColourPick::open(anchor, colour, original);
+            pk.place(popup_area((w, h)));
+            fx.pick = Some(pk);
+            let out = draw_frame(&mut p, &input, form.as_mut(), &mut fx);
+            areas = chrome_areas(&p, &out);
+        }
     }
     if args.backdrop == Backdrop::Off && !args.desk {
         return bmp;
@@ -93,6 +102,22 @@ pub fn render(args: &ShotArgs) -> Bitmap {
             chrome: args.backdrop != Backdrop::Off,
         },
     )
+}
+
+/// The chrome's rectangles in device pixels, for the frost simulation.
+fn chrome_areas(p: &Painter, out: &FrameOut) -> Vec<(usize, usize, usize, usize)> {
+    out.chrome
+        .iter()
+        .map(|r| {
+            let d = p.dev_rect(*r);
+            (
+                d.0.max(0) as usize,
+                d.1.max(0) as usize,
+                d.2.max(0) as usize,
+                d.3.max(0) as usize,
+            )
+        })
+        .collect()
 }
 
 /// The room round the window in a `--desk` shot, as the mockup's desktop padding.
@@ -283,6 +308,12 @@ pub fn all(dir: &Path) -> Result<Vec<PathBuf>, String> {
                 ..ShotArgs::new(Page::Sbx, dark)
             })?;
         }
+        // The colour picker open over the Lighting page.
+        shot(ShotArgs {
+            picker: true,
+            sample: Sample::Busy,
+            ..ShotArgs::new(Page::Lighting, dark)
+        })?;
         // The smallest window.
         for page in [Page::Chain, Page::Mixer, Page::Equalizer] {
             shot(ShotArgs {

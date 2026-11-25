@@ -86,6 +86,14 @@ impl Desk {
         self.held.map(|h| h.setting)
     }
 
+    /// The window stopped a drag without a release (a colour picker closed under the marker it held): a value that
+    /// was waiting out the throttle is dropped, so it cannot go out after the fact and overwrite what went since.
+    pub fn abandon(&mut self, s: Setting) {
+        if self.held.is_some_and(|h| h.setting == s) {
+            self.held = None;
+        }
+    }
+
     /// A user action. Returns the command for the worker, if one is to go now, or the reason nothing can be sent.
     pub fn intent(
         &mut self,
@@ -434,6 +442,35 @@ mod tests {
         g6_proto::packet::hex(r).trim_end_matches('0').to_string()
     }
 
+    /// The HID reports `tests/vectors/writes.json` keeps for this `g6` command line.
+    fn cli_reports(argv: &[&str]) -> Vec<String> {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/vectors/writes.json"),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let c = v["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| {
+                c["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| a.as_str().unwrap())
+                    .eq(argv.iter().copied())
+            })
+            .unwrap_or_else(|| panic!("no case for {argv:?}"));
+        c["hid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h.as_str().unwrap().trim_end_matches('0').to_string())
+            .collect()
+    }
+
     #[test]
     fn a_click_sends_exactly_the_cli_reports() {
         let mut rig = Rig::new();
@@ -443,36 +480,9 @@ mod tests {
         let got: Vec<String> = rig.dev.sent.iter().map(hex).collect();
         // From tests/vectors/writes.json: --playback-direct-mode Enabled, --sbx-surround-value 42,
         // --recording-mic-boost-db 20.
-        let cases = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/vectors/writes.json"),
-        )
-        .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&cases).unwrap();
-        let want_of = |argv: &[&str]| -> Vec<String> {
-            let c = v["cases"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| {
-                    c["argv"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|a| a.as_str().unwrap())
-                        .eq(argv.iter().copied())
-                })
-                .unwrap();
-            c["hid"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|h| h.as_str().unwrap().trim_end_matches('0').to_string())
-                .collect()
-        };
-        let mut want = want_of(&["--playback-direct-mode", "Enabled"]);
-        want.extend(want_of(&["--sbx-surround-value", "42"]));
-        want.extend(want_of(&["--recording-mic-boost-db", "30"]));
+        let mut want = cli_reports(&["--playback-direct-mode", "Enabled"]);
+        want.extend(cli_reports(&["--sbx-surround-value", "42"]));
+        want.extend(cli_reports(&["--recording-mic-boost-db", "30"]));
         assert_eq!(got, want);
         assert!(rig.desk.pending.is_empty());
         assert_eq!(rig.m.status.mic_boost_db, Some(30));
@@ -718,7 +728,7 @@ mod tests {
                 .is_none()
         );
         assert!(rig.toast.as_deref().unwrap().contains("pick a colour"));
-        rig.click(Setting::Colour, Val::Int(7));
+        rig.click(Setting::Colour, rgb_val([255, 255, 255]));
         assert_eq!(rig.m.colour, Some([255, 255, 255]));
         assert_eq!(rig.m.status.rgb_enabled, Some(true));
         assert!(
@@ -737,15 +747,21 @@ mod tests {
 
     // ---- through the drawn window: the regions a frame records are what a click acts on ----
 
-    use crate::frame::{FrameIn, FrameOut, draw_frame};
+    use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
     use crate::fx::Fx;
+    use crate::intent::rgb_of;
+    use crate::intent::rgb_val;
+    use crate::intent::test_device::hex_reports;
     use crate::kit::{Hit, Why};
     use crate::model::Page;
+    use crate::pick::{self, ColourPick, Press};
     use crate::prefs::Prefs;
     use mdshared_text::Bitmap;
+    use mdshared_ui::colour_picker::Outcome as ColourOutcome;
     use mdshared_ui::gfx::{Gfx, Painter};
+    use mdshared_ui::keys::{KeyName, Mods};
 
-    fn frame_of(m: &Model, page: Page) -> FrameOut {
+    fn draw_page(m: &Model, page: Page, fx: &mut Fx) -> FrameOut {
         let prefs = Prefs::default();
         let mut bmp = Bitmap::new(1100, 2400);
         let mut gfx = Gfx::new();
@@ -764,7 +780,11 @@ mod tests {
             dragging: None,
             frosted: false,
         };
-        draw_frame(&mut p, &input, None, &mut Fx::still())
+        draw_frame(&mut p, &input, None, fx)
+    }
+
+    fn frame_of(m: &Model, page: Page) -> FrameOut {
+        draw_page(m, page, &mut Fx::still())
     }
 
     /// The setting a region writes, if it writes one.
@@ -860,5 +880,238 @@ mod tests {
                 .rect_of(Hit::Set(Setting::Output, Val::Int(0)))
                 .is_some()
         );
+    }
+
+    // ---- the colour picker: the toolkit's picker over the Lighting page, its colours through the desk ----
+
+    /// The picker open over the Lighting page, driven as `app::App` drives it: the toolkit's press, drag, release
+    /// and keys, the desk's three phases, and `pick::on_close` for what a close writes.
+    struct Open {
+        rig: Rig,
+        pick: ColourPick,
+    }
+
+    impl Open {
+        /// With a red light set first, so a cancel has the colour from before the open to go back to.
+        fn new() -> Open {
+            let mut rig = Rig::new();
+            rig.click(Setting::Colour, rgb_val([255, 0, 0]));
+            let out = frame_of(&rig.m, Page::Lighting);
+            let anchor = out
+                .hits
+                .rect_of(Hit::Open(Setting::Colour))
+                .expect("the Colour row opens the picker");
+            let original = Setting::Colour.current(&rig.m);
+            let mut pick = ColourPick::open(anchor, pick::rgb_or_fallback(original), original);
+            let card = pick.place(popup_area((1100.0, 2400.0)));
+            assert!(card.w > 200.0 && card.h > 200.0, "{card:?}");
+            Open { rig, pick }
+        }
+
+        /// The point of the picker's square at saturation `s` and brightness `v`, each 0 to 1.
+        fn square(&self, s: f32, v: f32) -> (f32, f32) {
+            let r = self.pick.layout().square;
+            (r.x + s * r.w, r.y + (1.0 - v) * r.h)
+        }
+
+        /// A value on its way: the worker's turn, and its read-back taken.
+        fn write(&mut self, v: Val, phase: Phase) {
+            if let Some(c) = self.rig.act(Setting::Colour, v, phase) {
+                self.pick.sent = Some(v);
+                self.rig.run(vec![c]);
+            }
+        }
+
+        /// The window's `about_to_wait`: a value that waited out the throttle goes.
+        fn tick(&mut self) {
+            let Some(c) = self.rig.desk.tick(&self.rig.m, self.rig.t) else {
+                return;
+            };
+            if let Cmd::Write(w) = &c {
+                self.pick.sent = Some(w.val);
+            }
+            self.rig.run(vec![c]);
+        }
+
+        fn press(&mut self, x: f32, y: f32) {
+            match self.pick.press(x, y, false, 1) {
+                Press::Away => self.close(false),
+                Press::Colour(v) => self.write(v, Phase::Drag),
+                Press::Taken => {}
+            }
+        }
+
+        fn drag(&mut self, x: f32, y: f32) {
+            if let (_, Some(v)) = self.pick.drag(x, y) {
+                self.write(v, Phase::Drag);
+            }
+        }
+        fn release(&mut self) {
+            if let Some(v) = self.pick.release() {
+                self.write(v, Phase::Release);
+            }
+        }
+
+        fn key(&mut self, key: KeyName) {
+            let (outcome, colour) = self.pick.key(&key, Mods::default(), None);
+            if let Some(v) = colour {
+                self.write(v, Phase::Click);
+            }
+            match outcome {
+                ColourOutcome::Accept => self.close(true),
+                ColourOutcome::Cancel => self.close(false),
+                _ => {}
+            }
+        }
+
+        /// The window's close: what `pick::on_close` says goes, then a write-back on a cancel.
+        fn close(&mut self, accept: bool) {
+            let write = pick::on_close(
+                self.pick.sent,
+                self.pick.colour(),
+                self.pick.original,
+                accept,
+            );
+            self.rig.desk.abandon(Setting::Colour);
+            if let Some(v) = write {
+                self.write(v, if accept { Phase::Release } else { Phase::Click });
+            }
+        }
+    }
+
+    #[test]
+    fn dragging_in_the_picker_writes_the_colour_throttled_and_the_release_ends_it() {
+        let mut o = Open::new();
+        let before = o.rig.dev.writes.len();
+        let (x, y) = o.square(0.1, 0.9);
+        o.press(x, y);
+        assert_eq!(o.rig.dev.writes.len(), before + 1, "a press writes at once");
+        // A press is the start of a drag: the model takes the colour on release, and the ring follows the pending one
+        // in between, as for a slider.
+        assert_eq!(
+            Setting::Colour.current(&o.rig.desk.shown(&o.rig.m)),
+            Some(o.pick.colour())
+        );
+        // 100 moves 4 ms apart: 400 ms of dragging, as the slider test does.
+        for k in 0..100 {
+            let t = k as f32 / 100.0;
+            let (x, y) = o.square(0.1 + 0.8 * t, 0.9 - 0.7 * t);
+            o.drag(x, y);
+            o.rig.later(4);
+            o.tick();
+        }
+        let during = o.rig.dev.writes.len() - before;
+        assert!((2..=7).contains(&during), "{during} writes in 400 ms");
+        let last = o.pick.colour();
+        o.release();
+        assert_eq!(o.rig.dev.writes.last(), Some(&(Setting::Colour, last)));
+        // The read-back is the colour written: the row and the ring follow it, nothing is left pending.
+        assert_eq!(o.rig.m.colour, rgb_of(last));
+        assert!(o.rig.desk.pending.is_empty());
+        assert!(o.rig.desk.dragging().is_none());
+        // Undo is one step: the colour from before the whole press, drag and release.
+        assert_eq!(
+            o.rig.desk.undo,
+            Some(Undo {
+                setting: Setting::Colour,
+                before: rgb_val([255, 0, 0]),
+                after: last,
+            })
+        );
+        // Every report sent is the CLI's for `--lighting-rgb R G B`.
+        let mut want = Vec::new();
+        for (_, v) in &o.rig.dev.writes {
+            want.extend(hex_reports(Setting::Colour, *v, &o.rig.m));
+        }
+        assert_eq!(o.rig.dev.sent.iter().map(hex).collect::<Vec<_>>(), want);
+    }
+
+    #[test]
+    fn escape_after_a_drag_writes_the_colour_from_before_the_open_back() {
+        let mut o = Open::new();
+        let red = [255, 0, 0];
+        let (x, y) = o.square(0.9, 0.2);
+        o.press(x, y);
+        o.release();
+        let picked = o.rig.m.colour.expect("the drag was read back");
+        assert_ne!(picked, red);
+        assert_eq!(o.pick.sent, Some(rgb_val(picked)));
+        o.key(KeyName::Escape);
+        assert_eq!(
+            o.rig.dev.writes.last(),
+            Some(&(Setting::Colour, rgb_val(red)))
+        );
+        assert_eq!(o.rig.m.colour, Some(red));
+        assert!(o.rig.desk.pending.is_empty());
+    }
+
+    #[test]
+    fn a_press_away_from_the_picker_closes_it_without_a_write() {
+        let mut o = Open::new();
+        let (writes, sent) = (o.rig.dev.writes.len(), o.rig.dev.sent.len());
+        assert!(o.pick.sent.is_none());
+        // The title row: away from the card and from the row that opened it.
+        o.press(20.0, 10.0);
+        assert_eq!(o.rig.dev.writes.len(), writes);
+        assert_eq!(o.rig.dev.sent.len(), sent);
+        assert_eq!(o.rig.m.colour, Some([255, 0, 0]));
+        assert!(o.rig.desk.pending.is_empty());
+    }
+
+    #[test]
+    fn the_open_picker_covers_what_is_under_it_and_stays_inside_the_window() {
+        let m = Sample::Busy.model();
+        let mut fx = Fx::still();
+        let closed = draw_page(&m, Page::Lighting, &mut fx);
+        let anchor = closed
+            .hits
+            .rect_of(Hit::Open(Setting::Colour))
+            .expect("the Colour row opens the picker");
+        let mut pick = ColourPick::open(anchor, [0, 200, 255], None);
+        pick.place(popup_area((1100.0, 2400.0)));
+        fx.pick = Some(pick);
+        let open = draw_page(&m, Page::Lighting, &mut fx);
+        let card = open.hits.rect_of(Hit::Blocked).expect("the card is there");
+        assert!(card.x >= 0.0 && card.right() <= 1100.0, "{card:?}");
+        assert!(card.y >= 36.0 && card.bottom() <= 2400.0, "{card:?}");
+        for x in (card.x as i32..card.right() as i32).step_by(11) {
+            for y in (card.y as i32..card.bottom() as i32).step_by(11) {
+                assert_eq!(
+                    open.hits.at(x as f32, y as f32),
+                    Some(Hit::Blocked),
+                    "{x}, {y}"
+                );
+            }
+        }
+        assert_ne!(closed.hits.at(card.cx(), card.cy()), Some(Hit::Blocked));
+    }
+
+    #[test]
+    fn a_quick_pick_colour_is_the_cli_write_for_lighting_rgb() {
+        let m = Sample::Busy.model();
+        let out = frame_of(&m, Page::Lighting);
+        let green = rgb_val([0, 255, 0]);
+        let swatch = out
+            .hits
+            .rect_of(Hit::Set(Setting::Colour, green))
+            .expect("a quick-pick swatch");
+        assert_eq!(
+            out.hits.at(swatch.cx(), swatch.cy()),
+            Some(Hit::Set(Setting::Colour, green))
+        );
+        let mut rig = Rig::new();
+        rig.click(Setting::Colour, green);
+        assert_eq!(
+            rig.dev.sent.iter().map(hex).collect::<Vec<_>>(),
+            hex_reports(Setting::Colour, green, &rig.m)
+        );
+        // A colour no swatch has is the CLI's own reports too (`--lighting-rgb 12 34 56`).
+        rig.click(Setting::Colour, rgb_val([12, 34, 56]));
+        assert_eq!(
+            rig.dev.sent[9..].iter().map(hex).collect::<Vec<_>>(),
+            cli_reports(&["--lighting-rgb", "12", "34", "56"])
+        );
+        assert_eq!(rig.m.colour, Some([12, 34, 56]));
+        assert_eq!(Setting::Colour.text(rgb_val([12, 34, 56])), "#0c2238");
     }
 }

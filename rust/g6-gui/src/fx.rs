@@ -11,6 +11,7 @@ use mdshared_ui::menu::Menu;
 use mdshared_ui::settings::pages::Form;
 
 use crate::kit::{Hit, Why};
+use crate::pick::ColourPick;
 
 /// The new page rises into place from this far below, in logical px (WinUI's entrance moves a page about this far).
 pub const PAGE_RISE: f32 = 20.0;
@@ -27,6 +28,8 @@ pub struct Fx {
     pub tip: Option<(Rect, Why)>,
     /// A dropdown's open list of choices; each item is the click it stands for.
     pub menu: Option<Menu<Hit>>,
+    /// The Lighting page's colour picker, while it is open.
+    pub pick: Option<ColourPick>,
 }
 
 impl Fx {
@@ -40,6 +43,7 @@ impl Fx {
             leaving: None,
             tip: None,
             menu: None,
+            pick: None,
         }
     }
 

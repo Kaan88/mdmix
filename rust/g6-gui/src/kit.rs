@@ -38,6 +38,8 @@ pub enum Hit {
     Open(Setting),
     /// A device control the window doesn't change: the pointer says so and a tip says why.
     Inert(Why),
+    /// The open colour picker covers this: what is under it can't be hit until it closes.
+    Blocked,
 }
 
 /// Why a control doesn't write.
@@ -97,9 +99,10 @@ pub enum Bind {
 pub struct Hits(Vec<(Hit, Rect)>);
 
 impl Hit {
-    /// Whether a click on the region does anything: the title row drags the window and a read-only control is inert.
+    /// Whether a click on the region does anything: the title row drags the window, a read-only control is inert,
+    /// and what the open colour picker covers is not there to be hit.
     pub fn acts(self) -> bool {
-        !matches!(self, Hit::Drag | Hit::Inert(_))
+        !matches!(self, Hit::Drag | Hit::Inert(_) | Hit::Blocked)
     }
 }
 
@@ -353,6 +356,18 @@ pub const TOGGLE_H: f32 = 20.0;
 pub const SEG_H: f32 = 28.0;
 pub const SEG_H_SM: f32 = 24.0;
 pub const CTL_H: f32 = 28.0;
+/// The swatch of the colour row, and the room between it and its hex.
+pub const SWATCH_W: f32 = 40.0;
+pub const SWATCH_GAP: f32 = 8.0;
+const SWATCH_H: f32 = 24.0;
+/// A quick-pick swatch: its size and the room to the next (a press target of its own).
+const PICK: f32 = 20.0;
+const PICK_GAP: f32 = 6.0;
+
+/// The width of a row of `n` quick-pick swatches.
+pub fn swatches_w(n: usize) -> f32 {
+    n as f32 * PICK + n.saturating_sub(1) as f32 * PICK_GAP
+}
 
 /// The switch of the settings dialog: a pill with the knob at the end that says on. `None` is a state not read: a dash.
 pub fn toggle(p: &mut Painter, pal: &Palette, r: Rect, on: Option<bool>) {
@@ -725,6 +740,18 @@ pub enum Ctl {
         options: Vec<String>,
         bind: Bind,
     },
+    /// A colour: a swatch of it and its hex (`#1a2b3c`), which a click opens the picker from. `rgb` is `None` when
+    /// nothing has been set from here in this session (the G6 can't be asked which colour it shows).
+    Colour {
+        rgb: Option<[u8; 3]>,
+        hex: String,
+        bind: Bind,
+    },
+    /// A row of swatches: a click writes that colour at once.
+    Swatches {
+        colours: Vec<[u8; 3]>,
+        bind: Bind,
+    },
     /// Text, right aligned: a number, a version.
     Value {
         text: String,
@@ -996,6 +1023,14 @@ fn ctl_want(p: &mut Painter, ctl: &Ctl, inner_w: f32) -> (f32, f32) {
             let w = dropdown_want(p, text, options);
             (w, w.min(130.0))
         }
+        Ctl::Colour { hex, .. } => {
+            let w = SWATCH_W + SWATCH_GAP + p.measure(Face::Mono, SIZE_VALUE, hex).ceil();
+            (w, w)
+        }
+        Ctl::Swatches { colours, .. } => {
+            let w = swatches_w(colours.len());
+            (w, w)
+        }
         Ctl::Value { text, mono } => {
             let face = if *mono { Face::Mono } else { Face::Ui };
             let w = p.measure(face, SIZE_VALUE, text).ceil();
@@ -1013,7 +1048,7 @@ fn ctl_height(ctl: &Ctl) -> f32 {
         Ctl::Toggle(..) => TOGGLE_H,
         Ctl::Seg { small: true, .. } => SEG_H_SM,
         Ctl::Seg { .. } | Ctl::Dropdown { .. } | Ctl::Button { .. } => 28.0,
-        Ctl::Slider { .. } | Ctl::Value { .. } => 28.0,
+        Ctl::Slider { .. } | Ctl::Value { .. } | Ctl::Colour { .. } | Ctl::Swatches { .. } => 28.0,
     }
 }
 
@@ -1270,6 +1305,51 @@ fn draw_ctl(
                 Err(why) => Hit::Inert(why),
             };
             env.hits.add(hit, b);
+        }
+        Ctl::Colour { rgb, hex, bind } => {
+            let hex_w = p.measure(Face::Mono, SIZE_VALUE, hex).ceil();
+            let b = place(SWATCH_W + SWATCH_GAP + hex_w, CTL_H);
+            let hit = match env.gate(*bind) {
+                Ok(s) => Hit::Open(s),
+                Err(why) => Hit::Inert(why),
+            };
+            let sw = Rect::new(b.x, b.cy() - SWATCH_H / 2.0, SWATCH_W, SWATCH_H);
+            let edge = if env.is_hover(hit) || env.is_pressed(hit) {
+                pal.accent
+            } else {
+                pal.line
+            };
+            p.frame(sw, 5.0, pal.field, edge);
+            if let Some(c) = rgb {
+                p.rbox(sw.inset(1.0), 4.0, *c);
+            }
+            p.text(
+                Face::Mono,
+                SIZE_VALUE,
+                sw.right() + SWATCH_GAP,
+                b.cy(),
+                hex,
+                if rgb.is_some() { pal.text } else { pal.muted },
+                hex_w + 1.0,
+            );
+            env.hits.add(hit, b);
+        }
+        Ctl::Swatches { colours, bind } => {
+            let r = place(swatches_w(colours.len()), CTL_H);
+            let mut x = r.x;
+            for c in colours {
+                let sq = Rect::new(x, r.cy() - PICK / 2.0, PICK, PICK);
+                let hit = match env.gate(*bind) {
+                    Ok(s) => Hit::Set(s, crate::intent::rgb_val(*c)),
+                    Err(why) => Hit::Inert(why),
+                };
+                if env.is_hover(hit) {
+                    p.rbox(sq.inset(-2.0), 5.0, pal.accent);
+                }
+                p.rbox(sq, 4.0, *c);
+                env.hits.add(hit, sq);
+                x += PICK + PICK_GAP;
+            }
         }
         Ctl::Value { text, mono } => {
             let face = if *mono { Face::Mono } else { Face::Ui };

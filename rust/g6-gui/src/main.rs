@@ -18,6 +18,7 @@ mod intent;
 mod kit;
 mod model;
 mod pages;
+mod pick;
 mod prefs;
 mod sample;
 mod shot;

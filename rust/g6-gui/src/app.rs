@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use mdshared_text::Bitmap;
 use mdshared_ui::anim::{Clock, SystemClock};
+use mdshared_ui::colour_picker;
 use mdshared_ui::frost::{self, Frost};
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
 use mdshared_ui::keys::{self, Mods};
@@ -37,11 +38,12 @@ use mdshared_ui::corners::Corners;
 
 use crate::desk::{Desk, Phase};
 use crate::dialog;
-use crate::frame::{FrameIn, FrameOut, draw_frame};
+use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
 use crate::fx::Fx;
 use crate::intent::{Setting, Val};
 use crate::kit::{Hit, Hits};
 use crate::model::{Conn, Model, Page};
+use crate::pick::{self, ColourPick, Press};
 use crate::prefs::{self, Prefs, Theme};
 use crate::worker::{Cmd, ReadResult, Worker};
 
@@ -230,6 +232,7 @@ impl App {
         }
         if matches!(self.model.conn, Conn::Away(_)) {
             self.capture = None;
+            self.fx.pick = None;
         }
         self.sync_dialog();
         self.redraw();
@@ -303,6 +306,120 @@ impl App {
             .collect();
         self.fx.menu = Some(Menu::new(items, r.x, r.bottom() + 2.0, false));
         self.redraw();
+    }
+
+    // ---- the colour picker ---------------------------------------------------------------------
+
+    /// Opens the toolkit's colour picker on the Lighting page's Colour row, on the colour the row shows (or a mid
+    /// grey when nothing has been set from here: the G6 can't be asked).
+    fn open_picker(&mut self) {
+        let Some(anchor) = self.hits.rect_of(Hit::Open(Setting::Colour)) else {
+            return;
+        };
+        let original = Setting::Colour.current(&self.desk.shown(&self.model));
+        let mut pk = ColourPick::open(anchor, pick::rgb_or_fallback(original), original);
+        pk.place(popup_area(self.logical()));
+        self.fx.pick = Some(pk);
+        self.redraw();
+    }
+
+    /// Sends a colour through the desk, as a click at once, throttled while the pointer holds a marker, and with the
+    /// last value always on release.
+    fn write_colour(&mut self, v: Val, phase: Phase) {
+        match self
+            .desk
+            .intent(&self.model, Setting::Colour, v, phase, Instant::now())
+        {
+            Ok(Some(cmd)) => {
+                self.send(cmd);
+                if let Some(pk) = &mut self.fx.pick {
+                    pk.sent = Some(v);
+                }
+            }
+            Ok(None) => {}
+            Err(t) => self.say(t),
+        }
+    }
+
+    /// Closes the colour picker. Accepting keeps the colour, sending it when the last one did not go; anything else is
+    /// a cancel: the colour from before the open is written back, if something was written during this open.
+    fn close_picker(&mut self, accept: bool) {
+        let Some(pk) = self.fx.pick.take() else {
+            return;
+        };
+        let write = pick::on_close(pk.sent, pk.colour(), pk.original, accept);
+        // A drag left in hand must not send its waiting value after the fact: it would overwrite what goes now.
+        self.desk.abandon(Setting::Colour);
+        if let Some(v) = write {
+            self.write_colour(v, if accept { Phase::Release } else { Phase::Click });
+        }
+        self.redraw();
+    }
+
+    /// A press with the colour picker open: it is the picker's on its card; anywhere else the picker closes as a
+    /// cancel and nothing under it is pressed.
+    fn picker_press(&mut self, x: f32, y: f32, clicks: u8) {
+        let Some(pk) = self.fx.pick.as_mut() else {
+            return;
+        };
+        let press = pk.press(x, y, self.mods.shift, clicks);
+        let colour = match press {
+            Press::Away => {
+                self.close_picker(false);
+                return;
+            }
+            Press::Colour(v) => Some(v),
+            Press::Taken => None,
+        };
+        if let Some(v) = colour {
+            // A press is the start of a drag, as a slider's press is: it goes at once, and the whole press, drag and
+            // release is one step for Undo.
+            self.write_colour(v, Phase::Drag);
+        }
+        self.redraw();
+    }
+
+    /// The pointer moved with the picker open: a held marker follows it, a selection in the hex field grows. True
+    /// when the picture changed.
+    fn picker_move(&mut self, x: f32, y: f32) -> bool {
+        let Some(pk) = self.fx.pick.as_mut() else {
+            return false;
+        };
+        let (redraw, colour) = pk.drag(x, y);
+        if let Some(v) = colour {
+            // Throttled like a dragged slider: the desk keeps the newest value and sends it when its time comes.
+            self.write_colour(v, Phase::Drag);
+        }
+        redraw
+    }
+
+    /// The button went up over the open picker: the drag's last colour goes, whenever it was held.
+    fn picker_release(&mut self) {
+        let Some(pk) = self.fx.pick.as_mut() else {
+            return;
+        };
+        let colour = pk.release();
+        if let Some(v) = colour {
+            self.write_colour(v, Phase::Release);
+        }
+        self.redraw();
+    }
+
+    /// A key with the picker open: Tab between the parts, the arrows (Shift for more), Enter accepts, Escape cancels.
+    fn picker_key(&mut self, name: &keys::KeyName, typed: Option<&str>) {
+        let Some(pk) = self.fx.pick.as_mut() else {
+            return;
+        };
+        let (outcome, colour) = pk.key(name, self.mods, typed);
+        if let Some(v) = colour {
+            self.write_colour(v, Phase::Click);
+        }
+        match outcome {
+            colour_picker::Outcome::Accept => self.close_picker(true),
+            colour_picker::Outcome::Cancel => self.close_picker(false),
+            colour_picker::Outcome::Redraw | colour_picker::Outcome::Colour => self.redraw(),
+            colour_picker::Outcome::None | colour_picker::Outcome::Unused => {}
+        }
     }
 
     /// The dialog's Device page shows the model, so it is rebuilt when the model changes.
@@ -482,6 +599,13 @@ impl App {
             }
             return;
         }
+        if self.fx.pick.is_some() {
+            if self.picker_move(x, y) {
+                self.redraw();
+            }
+            self.update_cursor(x, y);
+            return;
+        }
         if let Some(m) = &mut self.fx.menu {
             if m.pointer(x, y) {
                 self.redraw();
@@ -512,6 +636,7 @@ impl App {
                 Some(ResizeDirection::NorthEast | ResizeDirection::SouthWest) => {
                     CursorIcon::NeswResize
                 }
+                None if self.fx.pick.is_some() => CursorIcon::Default,
                 None if self.dialog.is_none()
                     && self.fx.menu.is_none()
                     && matches!(self.hits.at(x, y), Some(Hit::Inert(_))) =>
@@ -555,6 +680,11 @@ impl App {
             }
             return;
         }
+        // The colour picker takes the press while it is open, wherever it is.
+        if self.fx.pick.is_some() {
+            self.picker_press(x, y, clicks);
+            return;
+        }
         if let (Some(dir), Some(w)) = (self.edge(x, y), &self.window) {
             let _ = w.drag_resize_window(dir);
             return;
@@ -584,6 +714,10 @@ impl App {
     fn released_at(&mut self, event_loop: &ActiveEventLoop, x: f32, y: f32) {
         if self.capture.is_some() {
             self.let_go();
+            return;
+        }
+        if self.fx.pick.is_some() {
+            self.picker_release();
             return;
         }
         if let Some(m) = &mut self.fx.menu {
@@ -638,14 +772,17 @@ impl App {
             Hit::Backdrop(i) => self.apply_setting(dialog::BACKDROP, &Value::Choice(i)),
             Hit::Corners(i) => self.apply_setting(dialog::CORNERS, &Value::Choice(i)),
             Hit::Set(s, v) => self.intent(s, v, Phase::Click),
+            Hit::Open(Setting::Colour) => self.open_picker(),
             Hit::Open(s) => self.open_menu(s),
             // A slider is taken on the press (`grab`), not on a click.
-            Hit::Slide(_) | Hit::Drag | Hit::Inert(_) => {}
+            Hit::Slide(_) | Hit::Drag | Hit::Inert(_) | Hit::Blocked => {}
         }
         self.redraw();
     }
 
     fn open_dialog(&mut self, page: usize) {
+        // A settings dialog is above the picker: the picker closes (as a cancel) rather than stay under it.
+        self.close_picker(false);
         self.dialog = Some(dialog::form_at(&self.prefs, &self.model, page));
         self.pressed = None;
         self.fx.menu = None;
@@ -720,6 +857,12 @@ impl App {
             return;
         }
         use keys::KeyName as K;
+        if self.fx.pick.is_some() {
+            if let Some(name) = name {
+                self.picker_key(&name, event.text.as_deref());
+            }
+            return;
+        }
         if let Some(m) = &mut self.fx.menu {
             match name {
                 Some(K::Escape) => self.fx.menu = None,
@@ -862,9 +1005,11 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Focused(f) => {
                 self.focused = f;
-                // A slider held while the window loses the focus is let go there.
+                // A slider held while the window loses the focus is let go there, and so is a colour marker: its
+                // last colour goes, and the picker stays open without one in hand.
                 if !f {
                     self.let_go();
+                    self.picker_release();
                 }
                 if f {
                     self.sync_motion();
@@ -904,6 +1049,8 @@ impl ApplicationHandler<UserEvent> for App {
                     if f.wheel(x, y, dy) {
                         self.redraw();
                     }
+                } else if self.fx.pick.is_some() {
+                    // The colour picker holds the page still while it is open, as its row does in the toolkit.
                 } else if let Some(m) = &mut self.fx.menu {
                     // Over its list the wheel scrolls it; elsewhere the page moves and the list closes.
                     if m.contains(x, y) {

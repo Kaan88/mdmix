@@ -332,6 +332,42 @@ shows rest only. Reduced motion was not tried live.
 - **Left:** the dialog's `Form` and the scrollbar do not animate (no hover state for the scrollbar yet); the tooltip has
   no show delay; a toast showing when a page switches is part of the old page's picture and fades with it.
 
+### G7: the colour picker (2026-11-26, Windows, cargo 1.99.1)
+
+**Built:** the Lighting page's Colour row is the toolkit's `colour_picker` in a `flyout`, not the eight-swatch
+dropdown; a row of the eight swatches stays beside it as quick picks (one click each, `--lighting-rgb`).
+
+- **The row** (`kit::Ctl::Colour`) draws a swatch of `Model::colour` — the colour written last in the session, since
+  the G6 can't be asked — and its hex, `#1a2b3c`; a click opens the picker (`Hit::Open(Setting::Colour)`).
+- **The picker** (`pick.rs`, `ColourPick`) is anchored to that row and placed inside the window every frame
+  (`colour_picker::flyout`, `Layout::new`, `Cache`); it is drawn over the page and the chrome with
+  `draw_card_animated` (it fades and rises from the row; at rest under `Policy::Never`), and under the settings dialog
+  and the toast. While it is open its card is one `Hit::Blocked` region, so nothing under it can be hit; a press
+  anywhere else closes it as a cancel and is not passed on.
+- **Writes:** every colour the picker lands on goes through `Desk` as `Setting::Colour` — a press or a key at once, a
+  drag throttled at the sliders' 80 ms, the release's value always — and through `Action::LightingRgb`, so the reports
+  are the CLI's `--lighting-rgb R G B` (checked against `writes.json`, which has 0 0 0, 12 34 56, 17 34 51, 255 0 0
+  and 255 255 255). The value is the colour as 0xRRGGBB in `Val::Int` (`intent::rgb_val` / `rgb_of`).
+- **Escape, or a press outside,** goes back to the colour the row showed when the picker opened, written back only if
+  something was written during this open. Enter accepts, sending the last colour if it did not go. Undo is one step:
+  the colour before the gesture.
+- **The ring** follows the pending value (`Desk::shown`), so it moves with the picker.
+- Away or not read: the row and the quick picks are inert with the reason, as before.
+
+**Run:** `cargo fmt --all --check`, `cargo clippy --release --workspace --all-targets -- -D warnings` and
+`cargo test --release --workspace` pass (81 tests in `g6-gui`, 126 in the workspace). `--shots` renders 58 pictures,
+two of them the picker open over the Lighting page (`busy-picker-lighting-{light,dark}.png`). New tests, all on the
+fake device (none opens the G6): a drag in the picker's square sends at most one write per 80 ms over 400 ms of
+dragging and the release sends the last colour; every report sent is the CLI's for that colour; Escape after a drag
+writes the colour from before the open back; a press away from the card closes it and writes nothing; the open card's
+whole rectangle is `Hit::Blocked` and stays inside the window; a quick-pick swatch is the CLI's write for its colour,
+and 12 34 56 is the CLI's write for `--lighting-rgb 12 34 56`.
+
+**Not verified:** anything with a hand on the window — the press, the drag, the keys (Tab, the arrows, Enter, Escape),
+the hex field's caret, the fade in — and the G6 in the new colour. The picker shots are drawn offline. The colour is
+still not read back, so the row shows "—" until something is set in the session, and a cancel with nothing known
+before the open keeps the picked colour, because there is none to put back.
+
 ## Tests
 
 - **Protocol:** the vectors, as in `rust-port.md`.

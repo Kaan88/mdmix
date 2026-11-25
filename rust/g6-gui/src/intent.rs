@@ -48,11 +48,34 @@ pub enum Setting {
 }
 
 /// A setting's value: a switch, or a number whose meaning is the setting's (a level, an index into its choices, mic
-/// boost in dB, an EQ gain in tenths of a dB).
+/// boost in dB, an EQ gain in tenths of a dB, a colour as 0xRRGGBB — see [`rgb_val`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Val {
     On(bool),
     Int(i64),
+}
+
+/// A colour as [`Setting::Colour`]'s value: 0xRRGGBB packed into `Val::Int` (the picker may land on any of the
+/// 16,777,216 colours, so an index into a list of swatches would not do).
+pub const fn rgb_val(rgb: [u8; 3]) -> Val {
+    Val::Int(((rgb[0] as i64) << 16) | ((rgb[1] as i64) << 8) | rgb[2] as i64)
+}
+
+/// The colour in a [`Setting::Colour`] value.
+pub fn rgb_of(v: Val) -> Option<[u8; 3]> {
+    let Val::Int(n) = v else {
+        return None;
+    };
+    if !(0..=0xFF_FFFF).contains(&n) {
+        return None;
+    }
+    Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
+/// A colour as the window shows it: `#1a2b3c`, the form the picker's own hex field uses.
+pub fn hex_of(rgb: [u8; 3]) -> String {
+    let [r, g, b] = rgb;
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 /// The SBX effects' names, in `SbxEffect::ALL` order.
@@ -66,7 +89,8 @@ const EFFECT_FLAGS: [&str; 5] = [
     "--sbx-dialog-plus",
 ];
 
-/// The static colours the Lighting page offers (`--lighting-rgb R G B`). The G6 can't be asked for its colour.
+/// The static colours the Lighting page offers as quick picks (`--lighting-rgb R G B`); the picker can land on any
+/// colour. The G6 can't be asked for its colour.
 pub const SWATCHES: [(&str, [u8; 3]); 8] = [
     ("Red", [255, 0, 0]),
     ("Orange", [255, 96, 0]),
@@ -284,11 +308,6 @@ impl Setting {
                 .enumerate()
                 .map(|(i, p)| (facts::mic_eq_name(p.name()), Val::Int(i as i64)))
                 .collect(),
-            Setting::Colour => SWATCHES
-                .iter()
-                .enumerate()
-                .map(|(i, (n, _))| (n.to_string(), Val::Int(i as i64)))
-                .collect(),
             _ => Vec::new(),
         }
     }
@@ -310,11 +329,12 @@ impl Setting {
             (S::SmartMode, Val::Int(n)) => pick(&facts::SMART_MODES, n),
             (S::Output, Val::Int(n)) => pick(&facts::OUTPUTS, n),
             (S::DecoderMode, Val::Int(n)) => pick(&facts::DECODER_MODES, n),
-            (S::DacFilter | S::EqPreset | S::MicEqPreset | S::Colour, Val::Int(n)) => self
+            (S::DacFilter | S::EqPreset | S::MicEqPreset, Val::Int(n)) => self
                 .options()
                 .into_iter()
                 .find(|(_, o)| *o == Val::Int(n))
                 .map_or_else(|| n.to_string(), |(l, _)| l),
+            (S::Colour, v) => rgb_of(v).map_or_else(|| format!("{v:?}"), hex_of),
             (_, Val::Int(n)) => n.to_string(),
         }
     }
@@ -373,10 +393,7 @@ impl Setting {
                     .and_then(|p| mic_eq_presets().iter().position(|x| *x == p)),
             ),
             S::Lighting => on(s.rgb_enabled),
-            S::Colour => index(
-                m.colour
-                    .and_then(|c| SWATCHES.iter().position(|(_, rgb)| *rgb == c)),
-            ),
+            S::Colour => m.colour.map(rgb_val),
             S::VolumeRing => on(s.ring_enabled),
         }
     }
@@ -475,8 +492,8 @@ impl Setting {
             }
             S::Lighting => s.rgb_enabled = Some(on),
             S::Colour => {
-                if let Some((_, rgb)) = SWATCHES.get(idx) {
-                    m.colour = Some(*rgb);
+                if let Some(rgb) = rgb_of(v) {
+                    m.colour = Some(rgb);
                     m.status.rgb_enabled = Some(true);
                 }
             }
@@ -568,10 +585,7 @@ impl Setting {
                     A::LightingRgb([r, g, b].map(i64::from))
                 }
             },
-            S::Colour => {
-                let (_, rgb) = idx(v).and_then(|i| SWATCHES.get(i)).ok_or_else(bad)?;
-                A::LightingRgb(rgb.map(i64::from))
-            }
+            S::Colour => A::LightingRgb(rgb_of(v).ok_or_else(bad)?.map(i64::from)),
             S::VolumeRing => A::LightingVolumeRing(on(v).ok_or_else(bad)?),
         })
     }
@@ -631,14 +645,14 @@ pub fn argv(s: Setting, v: Val, m: &Model) -> Result<Vec<String>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_device {
     use super::*;
-    use crate::sample::Sample;
     use g6_proto::apply::Host;
     use g6_proto::packet::{Batch, ProtoError, hex};
-    use std::collections::HashSet;
+    use g6_proto::types::Output;
 
-    struct NoHost;
+    pub struct NoHost;
+
     impl Host for NoHost {
         fn next_toggle_state(&mut self) -> Result<Output, ProtoError> {
             Err(ProtoError("no toggle".into()))
@@ -661,6 +675,14 @@ mod tests {
         }
         out
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_device::hex_reports;
+    use super::*;
+    use crate::sample::Sample;
+    use std::collections::HashSet;
 
     fn writes() -> serde_json::Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -669,8 +691,19 @@ mod tests {
     }
 
     /// Every value a control of the setting can ask for: both ways of a switch, each step of a slider, every
-    /// segment and every choice of a dropdown.
+    /// segment and every choice of a dropdown (for the colour: colours, which `writes.json` has cases for).
     fn values(s: Setting) -> Vec<Val> {
+        if s == Setting::Colour {
+            return [
+                [0, 0, 0],
+                [12, 34, 56],
+                [17, 34, 51],
+                [255, 0, 0],
+                [255, 255, 255],
+            ]
+            .map(rgb_val)
+            .to_vec();
+        }
         let mut v: Vec<Val> = if let Some((lo, hi, step)) = s.range() {
             let n = ((hi - lo) / step).round() as i32;
             (0..=n).map(|k| s.val_of(lo + step * k as f32)).collect()
@@ -734,8 +767,8 @@ mod tests {
                 }
             }
         }
-        // Every HID case but --toggle-output, the combined Scout Mode case, and the colours no swatch has.
-        assert!(matched >= 150, "{matched} cases matched");
+        // Every HID case but --toggle-output and the combined Scout Mode case.
+        assert!(matched >= 155, "{matched} cases matched");
     }
 
     #[test]
