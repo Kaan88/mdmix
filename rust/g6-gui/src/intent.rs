@@ -416,6 +416,11 @@ impl Setting {
         if self.unreadable() {
             return None;
         }
+        // The output was left out of the read that followed the write: the model still shows the one from before,
+        // but that is not an answer, so the pending switch keeps waiting for one.
+        if self == Setting::Output && m.output_unanswered {
+            return None;
+        }
         self.current(m).map(|c| c == v)
     }
 

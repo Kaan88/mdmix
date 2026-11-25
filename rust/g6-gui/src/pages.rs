@@ -21,7 +21,7 @@ use crate::kit::{
     seg_sm, value,
 };
 use crate::levels::{Meters, NO_METER};
-use crate::model::{MONITORING, MixerView, Model, Page, RECORDING, Strip};
+use crate::model::{Conn, MONITORING, MixerView, Model, Page, RECORDING, Strip};
 use crate::prefs::{Prefs, Theme};
 use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::corners::Corners;
@@ -78,6 +78,10 @@ pub fn notices(page: Page, m: &Model) -> Vec<Notice> {
 /// The badges at the right of a page's title.
 pub fn tags(page: Page, m: &Model) -> Vec<(String, Tone)> {
     let mut out = Vec::new();
+    // The values are the last ones read, not this run's: say so quietly, with no banner over the page.
+    if m.conn == Conn::Cached {
+        out.push(("Reading…".into(), Tone::Quiet));
+    }
     let s = &m.status;
     match page {
         Page::Sbx => {

@@ -57,6 +57,9 @@ pub enum Why {
     Away,
     /// The G6 hasn't been read yet.
     NotRead,
+    /// The first status read is still running (or the last status is still a cache): the values may be drawn, but
+    /// nothing can be written until the G6 answers.
+    Reading,
     /// The light can't be turned on without a colour, and the G6 can't be asked for its colour.
     NoColour,
     /// The preset's curve depends on the output, which isn't known.
@@ -79,6 +82,7 @@ impl Why {
             Why::NoWrite => "Read only: the command line has no write for this choice.",
             Why::Away => "The G6 is not connected.",
             Why::NotRead => "Not read from the G6 yet.",
+            Why::Reading => "Reading the G6…",
             Why::NoColour => {
                 "The G6 can't be asked which colour it had: pick a colour below to turn the light on."
             }
@@ -218,7 +222,11 @@ impl<'a> Env<'a> {
             Bind::Live(_) if matches!(self.model.conn, crate::model::Conn::Away(_)) => {
                 Err(Why::Away)
             }
-            Bind::Live(_) if !self.model.have_status => Err(Why::NotRead),
+            // A read is running (or the last status is a cache): the values are there to look at, not to change.
+            Bind::Live(_) if !matches!(self.model.conn, crate::model::Conn::Connected) => {
+                Err(Why::Reading)
+            }
+            Bind::Live(_) if !self.model.have_status => Err(Why::Reading),
             Bind::Live(s) => Ok(s),
         }
     }

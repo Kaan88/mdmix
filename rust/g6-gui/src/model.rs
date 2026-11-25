@@ -97,6 +97,9 @@ impl Page {
 pub enum Conn {
     /// A status read is running; nothing has come back yet.
     Reading,
+    /// A cache of the last status read is on screen; no read has answered yet. Its values are drawn but the
+    /// controls are inert until the first read replaces them.
+    Cached,
     Connected,
     /// The last read failed. The text says why.
     Away(String),
@@ -195,6 +198,10 @@ pub struct Model {
     pub have_status: bool,
     pub conn: Conn,
     pub mixer: Option<MixerView>,
+    /// The last read left the output out (the G6 settling after a switch). `status.output` keeps the value known
+    /// before it, but that value is stale: `Setting::confirmed` says "unanswered" rather than "the device has
+    /// another one", so a pending switch can keep waiting for a real answer.
+    pub output_unanswered: bool,
     /// The static colour written last in this session: the G6 can't be asked for it.
     pub colour: Option<[u8; 3]>,
 }
@@ -207,6 +214,21 @@ impl Model {
             have_status: false,
             conn: Conn::Reading,
             mixer: None,
+            output_unanswered: false,
+            colour: None,
+        }
+    }
+
+    /// The last status read is on screen while the first fresh read runs: the values the window had when it closed,
+    /// with every device control inert until the read replaces them.
+    pub fn cached(mut status: DeviceStatus, mixer: Option<MixerView>) -> Model {
+        facts::drop_direct_zeros(&mut status);
+        Model {
+            status,
+            have_status: true,
+            conn: Conn::Cached,
+            mixer,
+            output_unanswered: false,
             colour: None,
         }
     }
@@ -218,6 +240,7 @@ impl Model {
             have_status: true,
             conn: Conn::Connected,
             mixer,
+            output_unanswered: false,
             colour: None,
         }
     }
@@ -229,7 +252,9 @@ impl Model {
             Ok(mut status) => {
                 facts::drop_direct_zeros(&mut status);
                 // The output is always one or the other: a read it is missing from (the G6 still settling after a
-                // switch) keeps the one known, rather than showing neither.
+                // switch) keeps the one known, rather than showing neither. It is marked unanswered so a pending
+                // switch keeps waiting instead of being read as a different value.
+                self.output_unanswered = status.output.is_none();
                 if status.output.is_none() {
                     status.output = self.status.output.take();
                 }
@@ -359,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn a_read_without_the_output_keeps_the_one_known() {
+    fn a_read_without_the_output_keeps_the_one_known_and_marks_it_unanswered() {
         let mut m = Model::starting();
         let s = DeviceStatus {
             firmware: Some("1".into()),
@@ -367,7 +392,43 @@ mod tests {
             ..DeviceStatus::default()
         };
         m.apply(Ok(s.clone()), None);
+        assert!(!m.output_unanswered);
         m.apply(Ok(DeviceStatus { output: None, ..s }), None);
         assert_eq!(m.status.output.as_deref(), Some("Headphones"));
+        // Kept for the picture, but not an answer from this read.
+        assert!(m.output_unanswered);
+        m.apply(
+            Ok(DeviceStatus {
+                output: Some("Speakers".into()),
+                ..DeviceStatus::default()
+            }),
+            None,
+        );
+        assert!(!m.output_unanswered);
+    }
+
+    #[test]
+    fn a_cached_status_is_shown_but_not_confirmed_until_a_read() {
+        let mut m = Model::cached(
+            DeviceStatus {
+                firmware: Some("1".into()),
+                output: Some("Headphones".into()),
+                ..DeviceStatus::default()
+            },
+            None,
+        );
+        assert_eq!(m.conn, Conn::Cached);
+        assert!(m.have_status);
+        assert_eq!(m.status.output.as_deref(), Some("Headphones"));
+        m.apply(
+            Ok(DeviceStatus {
+                firmware: Some("1".into()),
+                output: Some("Speakers".into()),
+                ..DeviceStatus::default()
+            }),
+            None,
+        );
+        assert_eq!(m.conn, Conn::Connected);
+        assert_eq!(m.status.output.as_deref(), Some("Speakers"));
     }
 }

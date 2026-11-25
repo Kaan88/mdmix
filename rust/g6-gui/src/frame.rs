@@ -351,6 +351,7 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     let (dot, sub, sub_color) = match &m.conn {
         Conn::Connected => ([0x3f, 0xb9, 0x50], "USB DAC and amp", pal.muted),
         Conn::Reading => (pal.faint, "Reading the G6…", pal.muted),
+        Conn::Cached => (pal.accent, "Reading the G6…", pal.muted),
         Conn::Away(_) => (pal.warn, "Not connected", pal.warn),
     };
     kit::led(p, x + 4.0, y + 18.0, dot);
@@ -544,6 +545,9 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
     // The banner doesn't scroll: it is the first thing seen when the G6 is away.
     match &input.model.conn {
         Conn::Connected => {}
+        // The last known values are on screen and inert: a small "Reading…" badge in the page head says why, and
+        // there is no banner to dismiss.
+        Conn::Cached => {}
         Conn::Reading => {
             let r = Rect::new(main.x + PAD, top + 12.0, main.w - 2.0 * PAD, 36.0);
             p.rbox(r, 6.0, mix(pal.popup, pal.text, 0.05));

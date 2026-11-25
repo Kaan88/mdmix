@@ -50,6 +50,7 @@ pub fn pages(prefs: &Prefs, model: &Model) -> Vec<Page> {
     let connection = match &model.conn {
         Conn::Connected => "Connected".to_string(),
         Conn::Reading => "Reading…".to_string(),
+        Conn::Cached => "Reading… (the last values are shown)".to_string(),
         Conn::Away(why) => format!("Not connected: {why}"),
     };
     let device = Page::new(

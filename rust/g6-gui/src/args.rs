@@ -17,7 +17,8 @@ USAGE
 
   g6-gui --shot <page> <light|dark> [options]
       Render one page to a PNG without a window and without a device, from a fixed device state.
-        --sample <live|busy|away>    live: the recorded G6 (default); busy: invented values; away: no G6
+        --sample <live|busy|away|reading|cached>    live: the recorded G6 (default); busy: invented values; away: no G6;
+                                                     reading: before the first read; cached: the last status, inert
         --backdrop <off|mica|acrylic> the frosted chrome over a sample wallpaper (default mica, the app's default)
         --desk                       the desktop round the window, with its corners and shadow
         --dialog <appearance|device> the settings dialog over the page

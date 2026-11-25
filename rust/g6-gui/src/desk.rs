@@ -9,6 +9,9 @@
 //!   refused write, or a read-back with another value, drops the pending value, so the control springs back to what
 //!   the device has, with an error toast. A side effect on another setting (turning off the last SBX effect turns SBX
 //!   off) is just the read-back: nothing pending, nothing to reconcile.
+//! - **Settle:** a read-back that leaves the setting unanswered (the G6 settling after an output switch) keeps the
+//!   requested value pending and schedules reads at 1 s, 3 s and 7 s; at 8 s it stops and says once that the G6
+//!   hasn't confirmed it. No "was not set" toast comes from silence.
 //! - **Undo:** the last confirmed single setting, re-sent with the value from before as a new write.
 //! - **Away:** a turn whose status read fails drops every pending value; the model says the G6 is away.
 
@@ -61,11 +64,30 @@ pub struct Undo {
     pub after: Val,
 }
 
+/// A pending value whose read-back left the setting unanswered: follow-up reads at growing gaps, then one toast.
+/// `start` is when the first read-back came back without an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Settle {
+    start: Instant,
+    reads: u8,
+}
+
+/// When each follow-up read is due, counted from `start`: the gaps grow (1 s, then 2 s, then 4 s).
+const SETTLE_AT: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+    Duration::from_secs(7),
+];
+/// When waiting longer stops being useful: the desk says once that the G6 hasn't confirmed the change.
+const SETTLE_GIVE_UP: Duration = Duration::from_secs(8);
+
 #[derive(Debug, Default)]
 pub struct Desk {
     pub pending: BTreeMap<Setting, Pending>,
     held: Option<Held>,
     pub undo: Option<Undo>,
+    /// The pending values a read left unanswered, with their follow-up schedule.
+    settling: BTreeMap<Setting, Settle>,
 }
 
 /// The toast after a write: what happened, worded for a person, and the setting it is about. A second toast about
@@ -175,6 +197,8 @@ impl Desk {
                 undo,
             },
         );
+        // A new value replaces whatever the last one was waiting for.
+        self.settling.remove(&s);
         match phase {
             Phase::Click => {
                 self.held = None;
@@ -265,8 +289,9 @@ impl Desk {
     }
 
     /// A turn of the worker came back: the model takes the read, and each write is settled against it. Returns the
-    /// toast to show, if any (an error wins over a confirmation).
-    pub fn reconcile(&mut self, m: &mut Model, r: ReadResult) -> Option<Toast> {
+    /// toast to show, if any (an error wins over a confirmation). A read-back that leaves a setting unanswered keeps
+    /// its requested value pending and schedules follow-up reads (`follow_up`); nothing is said until one answers.
+    pub fn reconcile(&mut self, m: &mut Model, r: ReadResult, now: Instant) -> Option<Toast> {
         let why = r.status.as_ref().err().cloned();
         let wrote = !r.writes.is_empty();
         let about = r.writes.first().map(|w| w.setting);
@@ -275,6 +300,7 @@ impl Desk {
             let had = !self.pending.is_empty();
             self.pending.clear();
             self.held = None;
+            self.settling.clear();
             return if wrote || had {
                 Some(Toast {
                     text: format!("The G6 is not connected, so the change was not made. {why}"),
@@ -295,58 +321,152 @@ impl Desk {
             if p.val != w.val {
                 continue;
             }
-            let label = w.setting.label();
-            let held = self.dragging() == Some(w.setting);
             if let Err(e) = w.result {
+                let label = w.setting.label();
                 self.pending.remove(&w.setting);
+                self.settling.remove(&w.setting);
                 bad = Some(Toast::about(
                     w.setting,
                     format!("{label} was not changed: {e}"),
                 ));
                 continue;
             }
-            if held {
+            if self.dragging() == Some(w.setting) {
                 // The drag goes on; its release settles it.
                 continue;
             }
-            self.pending.remove(&w.setting);
-            match w.setting.confirmed(w.val, m) {
-                Some(true) => {
-                    good = Some(Toast::about(
-                        w.setting,
-                        confirmation(w.setting, w.val, p.undo, false),
-                    ));
-                    self.remember(w.setting, p, w.val);
-                }
-                None => {
-                    if w.setting.unreadable() {
-                        w.setting.put(w.val, m);
-                        self.remember(w.setting, p, w.val);
-                    }
-                    good = Some(Toast::about(
-                        w.setting,
-                        confirmation(w.setting, w.val, p.undo, true),
-                    ));
-                }
-                Some(false) => {
-                    let now = w
-                        .setting
-                        .current(m)
-                        .map_or_else(|| "something else".into(), |c| w.setting.text(c));
-                    bad = Some(Toast::about(
-                        w.setting,
-                        format!(
-                            "{label} was not set to {}: the G6 has {now}.",
-                            w.setting.text(w.val)
-                        ),
-                    ));
-                }
-            }
+            self.answer(m, w.setting, p, now, &mut good, &mut bad);
         }
+        // A follow-up read carries no writes: it is here to answer the values still settling.
+        self.settle_unanswered(m, now, &mut good, &mut bad);
         if r.user && bad.is_none() && good.is_none() {
             good = Some(Toast::plain("Status read from the G6."));
         }
         bad.or(good)
+    }
+
+    /// One pending value against the model: confirmed, refused, or still unanswered. A readable setting the G6 did
+    /// not answer for stays pending and starts (or keeps) its follow-up schedule; no toast is made for that.
+    fn answer(
+        &mut self,
+        m: &mut Model,
+        s: Setting,
+        p: Pending,
+        now: Instant,
+        good: &mut Option<Toast>,
+        bad: &mut Option<Toast>,
+    ) {
+        match s.confirmed(p.val, m) {
+            Some(true) => {
+                self.pending.remove(&s);
+                self.settling.remove(&s);
+                *good = Some(Toast::about(s, confirmation(s, p.val, p.undo, false)));
+                self.remember(s, p, p.val);
+            }
+            None if s.unreadable() => {
+                s.put(p.val, m);
+                self.pending.remove(&s);
+                self.settling.remove(&s);
+                *good = Some(Toast::about(s, confirmation(s, p.val, p.undo, true)));
+                self.remember(s, p, p.val);
+            }
+            None => {
+                self.settling.entry(s).or_insert(Settle {
+                    start: now,
+                    reads: 0,
+                });
+            }
+            Some(false) => {
+                let has = s
+                    .current(m)
+                    .map_or_else(|| "something else".into(), |c| s.text(c));
+                self.pending.remove(&s);
+                self.settling.remove(&s);
+                *bad = Some(Toast::about(
+                    s,
+                    format!(
+                        "{} was not set to {}: the G6 has {has}.",
+                        s.label(),
+                        s.text(p.val)
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// Re-checks every value still waiting for an answer against a read that just came in.
+    fn settle_unanswered(
+        &mut self,
+        m: &mut Model,
+        now: Instant,
+        good: &mut Option<Toast>,
+        bad: &mut Option<Toast>,
+    ) {
+        for s in self.settling.keys().copied().collect::<Vec<_>>() {
+            if self.dragging() == Some(s) {
+                continue;
+            }
+            let Some(p) = self.pending.get(&s).copied() else {
+                self.settling.remove(&s);
+                continue;
+            };
+            self.answer(m, s, p, now, good, bad);
+        }
+    }
+
+    /// When a follow-up read (or the give-up) is due, for the window's timer. `None` when nothing is settling, so an
+    /// idle window waits for an event.
+    pub fn settle_due(&self) -> Option<Instant> {
+        let mut due: Option<Instant> = None;
+        for st in self.settling.values() {
+            if let Some(at) = SETTLE_AT.get(usize::from(st.reads)) {
+                let at = st.start + *at;
+                due = Some(due.map_or(at, |d| d.min(at)));
+            }
+            let at = st.start + SETTLE_GIVE_UP;
+            due = Some(due.map_or(at, |d| d.min(at)));
+        }
+        due
+    }
+
+    /// The follow-up read when one is due now: one read serves every setting that is waiting. `None` before its time.
+    pub fn follow_up(&mut self, now: Instant) -> Option<Cmd> {
+        let mut due = false;
+        for st in self.settling.values_mut() {
+            if let Some(at) = SETTLE_AT.get(usize::from(st.reads))
+                && now >= st.start + *at
+            {
+                st.reads += 1;
+                due = true;
+            }
+        }
+        due.then_some(Cmd::Read { user: false })
+    }
+
+    /// The G6 stayed silent past the last follow-up: drop the pending value and say so once. What the device last
+    /// reported stays on screen; when it never reported one, the value that was asked for stands.
+    pub fn timed_out(&mut self, m: &mut Model, now: Instant) -> Option<Toast> {
+        let due: Vec<Setting> = self
+            .settling
+            .iter()
+            .filter(|(_, st)| now >= st.start + SETTLE_GIVE_UP)
+            .map(|(s, _)| *s)
+            .collect();
+        let mut toast = None;
+        for s in due {
+            self.settling.remove(&s);
+            let Some(p) = self.pending.remove(&s) else {
+                continue;
+            };
+            if s.current(m).is_none() {
+                s.put(p.val, m);
+            }
+            toast = Some(Toast::about(
+                s,
+                format!("{}: the G6 hasn't confirmed the change yet.", s.label()),
+            ));
+        }
+        toast
     }
 
     fn remember(&mut self, s: Setting, p: Pending, after: Val) {
@@ -398,6 +518,8 @@ mod tests {
         refuse: bool,
         stubborn: bool,
         gone: bool,
+        /// The next reads leave the output out, as the G6 does while it settles after a switch.
+        silent_output: usize,
     }
 
     impl Fake {
@@ -409,6 +531,7 @@ mod tests {
                 refuse: false,
                 stubborn: false,
                 gone: false,
+                silent_output: 0,
             }
         }
     }
@@ -434,7 +557,12 @@ mod tests {
             if self.gone {
                 Err("No G6 could be found.".into())
             } else {
-                Ok(self.status.clone())
+                let mut s = self.status.clone();
+                if self.silent_output > 0 {
+                    self.silent_output = self.silent_output.saturating_sub(1);
+                    s.output = None;
+                }
+                Ok(s)
             }
         }
         fn mixer(&mut self) -> Option<crate::model::MixerView> {
@@ -473,7 +601,7 @@ mod tests {
                 q.add(c);
             }
             let r = serve(&mut self.dev, &q);
-            self.toast = self.desk.reconcile(&mut self.m, r).map(|t| t.text);
+            self.toast = self.desk.reconcile(&mut self.m, r, self.t).map(|t| t.text);
         }
 
         fn act(&mut self, s: Setting, v: Val, phase: Phase) -> Option<Cmd> {
@@ -493,6 +621,15 @@ mod tests {
 
         fn later(&mut self, ms: u64) {
             self.t += Duration::from_millis(ms);
+        }
+
+        /// The window's `about_to_wait`: a follow-up read whose time has come goes now. True when one went.
+        fn follow(&mut self) -> bool {
+            let Some(cmd) = self.desk.follow_up(self.t) else {
+                return false;
+            };
+            self.run(vec![cmd]);
+            true
         }
     }
 
@@ -586,14 +723,20 @@ mod tests {
         let mut q = Queue::default();
         q.add(c.expect("a write"));
         let r = serve(&mut rig.dev, &q);
-        let t = rig.desk.reconcile(&mut rig.m, r).expect("a confirmation");
+        let t = rig
+            .desk
+            .reconcile(&mut rig.m, r, rig.t)
+            .expect("a confirmation");
         assert_eq!(t.setting, Some(Setting::MicBoost));
         assert!(t.text.starts_with("Mic boost set to 30 dB."), "{}", t.text);
         // A read is about no setting: it stands on its own.
         let mut q = Queue::default();
         q.add(Cmd::Read { user: true });
         let r = serve(&mut rig.dev, &q);
-        let t = rig.desk.reconcile(&mut rig.m, r).expect("a read's answer");
+        let t = rig
+            .desk
+            .reconcile(&mut rig.m, r, rig.t)
+            .expect("a read's answer");
         assert_eq!(t.setting, None);
         assert_eq!(t.text, "Status read from the G6.");
     }
@@ -796,6 +939,113 @@ mod tests {
     }
 
     #[test]
+    fn an_unanswered_output_keeps_the_requested_value_and_is_read_again() {
+        let mut rig = Rig::new();
+        // The busy sample is on Headphones.
+        assert_eq!(rig.m.status.output.as_deref(), Some("Headphones"));
+        rig.dev.silent_output = usize::MAX;
+        let c = rig
+            .act(Setting::Output, Val::Int(0), Phase::Click)
+            .expect("a write");
+        rig.run(vec![c]);
+        // The read-back left the output out: the old one stays in the model for the picture, marked unanswered.
+        assert_eq!(rig.m.status.output.as_deref(), Some("Headphones"));
+        assert!(rig.m.output_unanswered);
+        assert_eq!(Setting::Output.confirmed(Val::Int(0), &rig.m), None);
+        // The control shows what was asked for, pending, and nothing is said: it is not a refusal yet.
+        assert!(rig.desk.pending.contains_key(&Setting::Output));
+        assert_eq!(
+            Setting::Output.current(&rig.desk.shown(&rig.m)),
+            Some(Val::Int(0))
+        );
+        assert_eq!(rig.toast, None);
+        // The follow-ups are 1 s, 3 s and 7 s after the write.
+        let start = rig.t;
+        assert_eq!(rig.desk.settle_due(), Some(start + Duration::from_secs(1)));
+        rig.later(1000);
+        assert!(rig.follow(), "the 1 s read is due");
+        assert!(rig.desk.pending.contains_key(&Setting::Output));
+        assert_eq!(rig.toast, None);
+        assert_eq!(rig.desk.settle_due(), Some(start + Duration::from_secs(3)));
+        rig.later(2000);
+        assert!(rig.follow(), "the 3 s read is due");
+        assert!(rig.desk.pending.contains_key(&Setting::Output));
+        assert_eq!(rig.toast, None);
+        assert_eq!(rig.desk.settle_due(), Some(start + Duration::from_secs(7)));
+        // The G6 answers on the last follow-up: the switch is confirmed, with the ordinary toast.
+        rig.dev.silent_output = 0;
+        rig.later(4000);
+        assert!(rig.follow(), "the 7 s read is due");
+        assert!(rig.desk.pending.is_empty());
+        assert!(!rig.m.output_unanswered);
+        assert_eq!(rig.m.status.output.as_deref(), Some("Speakers"));
+        assert_eq!(rig.toast.as_deref(), Some("Output set to Speakers."));
+        assert_eq!(rig.desk.settle_due(), None);
+    }
+
+    #[test]
+    fn a_g6_that_never_answers_says_so_once_and_never_calls_it_refused() {
+        let mut rig = Rig::new();
+        rig.dev.silent_output = usize::MAX;
+        let c = rig
+            .act(Setting::Output, Val::Int(0), Phase::Click)
+            .expect("a write");
+        rig.run(vec![c]);
+        // The three follow-up reads go, each with nothing said.
+        for gap in [1000, 2000, 4000] {
+            rig.later(gap);
+            assert!(rig.follow(), "a follow-up read is due");
+            assert!(rig.desk.pending.contains_key(&Setting::Output));
+            assert_eq!(rig.toast, None);
+        }
+        // Nothing more is asked, and at 8 s the desk gives up once.
+        assert_eq!(rig.desk.settle_due(), Some(rig.t + Duration::from_secs(1)));
+        rig.later(1000);
+        assert!(rig.desk.follow_up(rig.t).is_none());
+        let t = rig
+            .desk
+            .timed_out(&mut rig.m, rig.t)
+            .expect("one toast at the end");
+        assert_eq!(t.text, "Output: the G6 hasn't confirmed the change yet.");
+        assert_eq!(t.setting, Some(Setting::Output));
+        assert!(!t.text.contains("was not set"));
+        assert!(rig.desk.pending.is_empty());
+        // What the device last reported stays; nothing is left pending.
+        assert_eq!(
+            Setting::Output.current(&rig.desk.shown(&rig.m)),
+            Some(Val::Int(1))
+        );
+        assert!(rig.desk.timed_out(&mut rig.m, rig.t).is_none());
+    }
+
+    #[test]
+    fn startup_with_a_cache_shows_its_values_inert_until_the_read() {
+        let mut cached = Sample::Live.model();
+        cached.conn = Conn::Cached;
+        assert_eq!(Setting::Output.current(&cached), Some(Val::Int(0)));
+        // Every device control is drawn but nothing can be written yet.
+        for page in Page::ALL {
+            let out = frame_of(&cached, page);
+            assert!(
+                out.hits.iter().all(|(h, _)| setting_of(h).is_none()),
+                "{page:?}"
+            );
+            if page == Page::Playback {
+                assert!(out.hits.iter().any(|(h, _)| h == Hit::Inert(Why::Reading)));
+            }
+        }
+        // The first read replaces the cache and the controls come alive on the read's values.
+        cached.apply(Ok(Sample::Busy.model().status), None);
+        assert_eq!(cached.conn, Conn::Connected);
+        let out = frame_of(&cached, Page::Playback);
+        assert!(
+            out.hits
+                .rect_of(Hit::Set(Setting::Output, Val::Int(1)))
+                .is_some()
+        );
+    }
+
+    #[test]
     fn the_colour_is_kept_as_written_because_the_g6_cannot_say() {
         let mut rig = Rig::new();
         // With no colour known, the light can't be turned on: there is no colour to send.
@@ -925,7 +1175,7 @@ mod tests {
         let away = Sample::Away.model();
         let mut starting = Model::starting();
         starting.status = Sample::Live.model().status;
-        for (m, why) in [(away, Why::Away), (starting, Why::NotRead)] {
+        for (m, why) in [(away, Why::Away), (starting, Why::Reading)] {
             for page in Page::ALL {
                 let out = frame_of(&m, page);
                 assert!(

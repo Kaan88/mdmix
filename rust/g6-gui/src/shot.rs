@@ -56,7 +56,7 @@ pub fn render(args: &ShotArgs) -> Bitmap {
     let now = Instant::now();
     let meters = match args.sample {
         Sample::Busy => Meters::busy(now),
-        Sample::Live | Sample::Away => Meters::none(),
+        Sample::Live | Sample::Away | Sample::Reading | Sample::Cached => Meters::none(),
     };
     let input = FrameIn {
         model: &model,
@@ -297,6 +297,13 @@ pub fn all(dir: &Path) -> Result<Vec<PathBuf>, String> {
             sample: Sample::Away,
             ..ShotArgs::new(Page::Mixer, dark)
         })?;
+        // The first frame: the status cache on screen and inert, and no cache at all while the read runs.
+        for sample in [Sample::Cached, Sample::Reading] {
+            shot(ShotArgs {
+                sample,
+                ..ShotArgs::new(Page::Playback, dark)
+            })?;
+        }
         // The chrome without a backdrop, and Acrylic (Mica is the default of every other shot).
         for backdrop in [Backdrop::Off, Backdrop::Acrylic] {
             shot(ShotArgs {

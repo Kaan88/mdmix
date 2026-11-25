@@ -121,6 +121,10 @@ pub enum Sample {
     Busy,
     /// No G6: the last status stays and the banner shows.
     Away,
+    /// The window before its first read: every control empty and inert, the header saying it is reading.
+    Reading,
+    /// The status cache on screen: the values the last run read, inert, with a quiet "Reading…" badge.
+    Cached,
 }
 
 impl Sample {
@@ -129,6 +133,8 @@ impl Sample {
             "live" => Some(Sample::Live),
             "busy" => Some(Sample::Busy),
             "away" => Some(Sample::Away),
+            "reading" => Some(Sample::Reading),
+            "cached" => Some(Sample::Cached),
             _ => None,
         }
     }
@@ -138,6 +144,8 @@ impl Sample {
             Sample::Live => "live",
             Sample::Busy => "busy",
             Sample::Away => "away",
+            Sample::Reading => "reading",
+            Sample::Cached => "cached",
         }
     }
 
@@ -152,6 +160,8 @@ impl Sample {
                 );
                 m
             }
+            Sample::Reading => Model::starting(),
+            Sample::Cached => Model::cached(busy_status(), Some(busy_mixer())),
         }
     }
 }
@@ -184,7 +194,13 @@ mod tests {
 
     #[test]
     fn names_round_trip() {
-        for s in [Sample::Live, Sample::Busy, Sample::Away] {
+        for s in [
+            Sample::Live,
+            Sample::Busy,
+            Sample::Away,
+            Sample::Reading,
+            Sample::Cached,
+        ] {
             assert_eq!(Sample::from_name(s.name()), Some(s));
         }
     }

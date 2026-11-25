@@ -428,6 +428,49 @@ minimise/occlusion transitions and the join on exit are all unconfirmed. An unpl
 0, which shows a flat meter rather than "no meter". The look of the meter in the strip was judged from the offline
 shots only.
 
+### Startup from the last status and settling a silent read-back (2026-11-26, Windows, cargo 1.99.1)
+
+**Built:** the window opens on what the G6 said last time, and a write the G6 doesn't answer for is asked about again
+instead of being called refused.
+
+- **The cache** (`rust/g6-gui/src/cache.rs`) is `status-cache.json` beside `settings.ini` in
+  `%LOCALAPPDATA%\g6-gui\`, written atomically with the same `settings::write_atomic` the preferences use after every
+  successful full status read, and read at start. It holds the whole `DeviceStatus` and the mixer view; the JSON is
+  written and read by hand (a `"version": 1` guard, no derives and no I/O in `g6-proto`). `serde_json` moved from
+  `g6-gui`'s dev-dependencies to its dependencies, already pinned in the workspace: no new third-party code.
+- **Startup:** `Model::cached` puts the cache on screen as `Conn::Cached` on the first frame. Every device control
+  draws its value but is inert with the reason "Reading the G6…"; the sidebar's device line says the same and the page
+  head carries a quiet "Reading…" badge (`Tone::Quiet`), with no banner. The first read replaces the cache
+  (`Conn::Connected`, the animator glides changed values). A failed first read falls back to the away banner with the
+  cached values still shown and inert. With no cache the window is `Conn::Reading` as before, but its controls are now
+  inert with the same "Reading the G6…" reason rather than "Not read from the G6 yet.".
+- **Settling** (`desk.rs`): a write whose read-back leaves a readable setting unanswered (`confirmed` is `None`)
+  keeps the requested value pending — the pending value is drawn over the model, so it wins over the stale value the
+  model keeps — and schedules reads at 1 s, 3 s and 7 s after the write. `Desk::follow_up` sends one worker
+  `Cmd::Read { user: false }` when one is due, `Desk::settle_due` joins the loop's `WaitUntil` deadline (and is `None`
+  when nothing settles). An answer confirms with the ordinary toast or springs back; no toast is made from silence.
+  At 8 s `Desk::timed_out` drops the pending value and says once `"<Label>: the G6 hasn't confirmed the change
+  yet."`, keeping what the device last reported (or the requested value when it never reported one).
+- **The output rule:** `Model::output_unanswered` records a successful read that left the output out. The model still
+  shows the output from before, but `Setting::confirmed` answers `None` for it then instead of `false`, so a switch
+  waits for a real answer rather than springing back to the old output.
+
+**Run:** `cargo fmt --all --check`, `cargo clippy --release --workspace --all-targets -- -D warnings` and
+`cargo test --release --workspace` pass (103 tests in `g6-gui`, 148 in the workspace). `--shots` renders 62 pictures;
+the new ones are `cached-playback-{light,dark}.png` and `reading-playback-{light,dark}.png` (the samples are `cached`
+and `reading`). New tests, none opening a device or a window: busy and live `DeviceStatus` caches with and without the
+mixer round-trip equal to the original; a damaged, foreign-version, empty-status or missing file is no cache; a save
+and load on disk round-trips and a damaged file reads as no cache; the cache sample's values are drawn and every
+device control is inert with `Why::Reading` until a read, after which the read's values are live; a silent output
+keeps the requested value pending with `confirmed` `None` and follow-up reads due at 1 s, 3 s and 7 s, then the
+confirmation toast when the G6 answers; a G6 that never answers gives exactly one "hasn't confirmed" toast (never
+"was not set") and leaves the last reported output shown.
+
+**Not verified:** no run on the G6, so the cache on a real start, the first frame's look in the window, and the 1/3/7 s
+schedule against the device's real settling time are unconfirmed; the cached and reading pictures are offline shots.
+Writing the cache beside the preferences was not tried with a read-only directory or a full disk (a failure is only a
+missing cache next time). Several settings left unanswered at once would clear them together but show one toast.
+
 ## Tests
 
 - **Protocol:** the vectors, as in `rust-port.md`.

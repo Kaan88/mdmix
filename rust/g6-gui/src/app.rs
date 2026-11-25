@@ -37,6 +37,7 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::corners::Corners;
 
+use crate::cache::{self, Cached};
 use crate::desk::{Desk, Phase, Toast};
 use crate::dialog;
 use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
@@ -116,7 +117,7 @@ pub fn run(page: Option<Page>) -> i32 {
     if let Some(p) = page {
         prefs.page = p;
     }
-    let mut app = App::new(prefs, worker, levels);
+    let mut app = App::new(prefs, worker, levels, cache::load());
     // The first read starts at once, before the window exists: the window opens while it runs.
     app.ask_read(false);
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -173,11 +174,12 @@ struct App {
 }
 
 impl App {
-    fn new(prefs: Prefs, worker: Worker, levels: LevelsHandle) -> App {
+    fn new(prefs: Prefs, worker: Worker, levels: LevelsHandle, cached: Option<Cached>) -> App {
         App {
             page: prefs.page,
             prefs,
-            model: Model::starting(),
+            // The last status read is on screen at once, inert, until this run's first read replaces it.
+            model: cached.map_or_else(Model::starting, |c| Model::cached(c.status, c.mixer)),
             worker,
             window: None,
             surface: None,
@@ -252,8 +254,16 @@ impl App {
 
     fn read_done(&mut self, r: ReadResult) {
         // The writes of the turn are settled against its read; a read the user asked for says how it went.
-        if let Some(t) = self.desk.reconcile(&mut self.model, r) {
+        let read_ok = r.status.is_ok();
+        if let Some(t) = self.desk.reconcile(&mut self.model, r, Instant::now()) {
             self.say(t);
+        }
+        // A full status read is what the next start opens on.
+        if read_ok && self.model.conn == Conn::Connected {
+            cache::save(&Cached {
+                status: self.model.status.clone(),
+                mixer: self.model.mixer.clone(),
+            });
         }
         if matches!(self.model.conn, Conn::Away(_)) {
             self.capture = None;
@@ -1160,6 +1170,15 @@ impl ApplicationHandler<UserEvent> for App {
             self.send(cmd);
             self.redraw();
         }
+        // A write the G6 didn't answer for is asked again, at 1 s, 3 s and 7 s; at 8 s the desk gives up and says so.
+        if let Some(cmd) = self.desk.follow_up(now) {
+            self.send(cmd);
+            self.redraw();
+        }
+        if let Some(t) = self.desk.timed_out(&mut self.model, now) {
+            self.sync_dialog();
+            self.say(t);
+        }
         // Whichever toast's time is up goes, and its exit plays from the next frame.
         if self.fx.toasts.tick(now) {
             self.redraw();
@@ -1168,6 +1187,7 @@ impl ApplicationHandler<UserEvent> for App {
         let due = [
             self.deadline,
             self.desk.due(),
+            self.desk.settle_due(),
             self.fx.toasts.deadline(),
             self.fx.tip.deadline(),
             self.meters.next_wake(now, levels::POLL),

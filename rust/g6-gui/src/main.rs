@@ -8,6 +8,7 @@
 
 mod app;
 mod args;
+mod cache;
 mod desk;
 mod dialog;
 mod facts;
