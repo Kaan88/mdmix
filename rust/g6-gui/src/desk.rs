@@ -68,8 +68,43 @@ pub struct Desk {
     pub undo: Option<Undo>,
 }
 
-/// The toast after a write: what happened, worded for a person.
-pub type Toast = String;
+/// The toast after a write: what happened, worded for a person, and the setting it is about. A second toast about
+/// the same setting replaces the first in place; one about nothing (a read, a general refusal) stands on its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Toast {
+    pub text: String,
+    pub setting: Option<Setting>,
+}
+
+impl Toast {
+    /// A toast not about one setting.
+    pub fn plain(text: impl Into<String>) -> Toast {
+        Toast {
+            text: text.into(),
+            setting: None,
+        }
+    }
+
+    /// A toast about what was done to one setting.
+    pub fn about(setting: Setting, text: impl Into<String>) -> Toast {
+        Toast {
+            text: text.into(),
+            setting: Some(setting),
+        }
+    }
+}
+
+impl From<String> for Toast {
+    fn from(text: String) -> Toast {
+        Toast::plain(text)
+    }
+}
+
+impl From<&str> for Toast {
+    fn from(text: &str) -> Toast {
+        Toast::plain(text)
+    }
+}
 
 impl Desk {
     /// The model as drawn: the device's values with the pending ones over them.
@@ -117,10 +152,14 @@ impl Desk {
     ) -> Result<Option<Cmd>, Toast> {
         if m.conn != Conn::Connected || !m.have_status {
             self.held = None;
-            return Err("The G6 is not connected, so nothing was changed.".into());
+            return Err(Toast::about(
+                s,
+                "The G6 is not connected, so nothing was changed.",
+            ));
         }
         // The action is built now, so a value that can't be written is said at once and never shown as pending.
-        s.action(v, &self.shown(m))?;
+        s.action(v, &self.shown(m))
+            .map_err(|e| Toast::about(s, e))?;
         if phase == Phase::Click && !self.pending.contains_key(&s) && s.current(m) == Some(v) {
             return Ok(None);
         }
@@ -180,7 +219,9 @@ impl Desk {
     }
 
     fn send(&self, m: &Model, s: Setting, v: Val) -> Result<Cmd, Toast> {
-        let action = s.action(v, &self.shown(m))?;
+        let action = s
+            .action(v, &self.shown(m))
+            .map_err(|e| Toast::about(s, e))?;
         Ok(Cmd::Write(Write {
             setting: s,
             val: v,
@@ -209,12 +250,15 @@ impl Desk {
     /// Ctrl+Z: the last confirmed setting goes back to the value it had, as a new write.
     pub fn undo(&mut self, m: &Model, now: Instant) -> Result<Option<Cmd>, Toast> {
         let Some(u) = self.undo.take() else {
-            return Err("Nothing to undo.".into());
+            return Err(Toast::plain("Nothing to undo."));
         };
         if u.setting.current(m) != Some(u.after) {
-            return Err(format!(
-                "{} has changed since, so there is nothing to undo.",
-                u.setting.label()
+            return Err(Toast::about(
+                u.setting,
+                format!(
+                    "{} has changed since, so there is nothing to undo.",
+                    u.setting.label()
+                ),
             ));
         }
         self.intent_as(m, u.setting, u.before, Phase::Click, now, true)
@@ -225,18 +269,20 @@ impl Desk {
     pub fn reconcile(&mut self, m: &mut Model, r: ReadResult) -> Option<Toast> {
         let why = r.status.as_ref().err().cloned();
         let wrote = !r.writes.is_empty();
+        let about = r.writes.first().map(|w| w.setting);
         m.apply(r.status, r.mixer);
         if let Some(why) = why {
             let had = !self.pending.is_empty();
             self.pending.clear();
             self.held = None;
             return if wrote || had {
-                Some(format!(
-                    "The G6 is not connected, so the change was not made. {why}"
-                ))
+                Some(Toast {
+                    text: format!("The G6 is not connected, so the change was not made. {why}"),
+                    setting: about,
+                })
             } else {
                 // A read the user asked for: its answer is the reason.
-                r.user.then_some(why)
+                r.user.then(|| Toast::plain(why))
             };
         }
         let mut good = None;
@@ -253,7 +299,10 @@ impl Desk {
             let held = self.dragging() == Some(w.setting);
             if let Err(e) = w.result {
                 self.pending.remove(&w.setting);
-                bad = Some(format!("{label} was not changed: {e}"));
+                bad = Some(Toast::about(
+                    w.setting,
+                    format!("{label} was not changed: {e}"),
+                ));
                 continue;
             }
             if held {
@@ -263,7 +312,10 @@ impl Desk {
             self.pending.remove(&w.setting);
             match w.setting.confirmed(w.val, m) {
                 Some(true) => {
-                    good = Some(confirmation(w.setting, w.val, p.undo, false));
+                    good = Some(Toast::about(
+                        w.setting,
+                        confirmation(w.setting, w.val, p.undo, false),
+                    ));
                     self.remember(w.setting, p, w.val);
                 }
                 None => {
@@ -271,22 +323,28 @@ impl Desk {
                         w.setting.put(w.val, m);
                         self.remember(w.setting, p, w.val);
                     }
-                    good = Some(confirmation(w.setting, w.val, p.undo, true));
+                    good = Some(Toast::about(
+                        w.setting,
+                        confirmation(w.setting, w.val, p.undo, true),
+                    ));
                 }
                 Some(false) => {
                     let now = w
                         .setting
                         .current(m)
                         .map_or_else(|| "something else".into(), |c| w.setting.text(c));
-                    bad = Some(format!(
-                        "{label} was not set to {}: the G6 has {now}.",
-                        w.setting.text(w.val)
+                    bad = Some(Toast::about(
+                        w.setting,
+                        format!(
+                            "{label} was not set to {}: the G6 has {now}.",
+                            w.setting.text(w.val)
+                        ),
                     ));
                 }
             }
         }
         if r.user && bad.is_none() && good.is_none() {
-            good = Some("Status read from the G6.".into());
+            good = Some(Toast::plain("Status read from the G6."));
         }
         bad.or(good)
     }
@@ -415,14 +473,14 @@ mod tests {
                 q.add(c);
             }
             let r = serve(&mut self.dev, &q);
-            self.toast = self.desk.reconcile(&mut self.m, r);
+            self.toast = self.desk.reconcile(&mut self.m, r).map(|t| t.text);
         }
 
         fn act(&mut self, s: Setting, v: Val, phase: Phase) -> Option<Cmd> {
             match self.desk.intent(&self.m, s, v, phase, self.t) {
                 Ok(c) => c,
                 Err(t) => {
-                    self.toast = Some(t);
+                    self.toast = Some(t.text);
                     None
                 }
             }
@@ -519,6 +577,25 @@ mod tests {
             rig.toast.as_deref(),
             Some("SBX Surround set to 62 %. Ctrl+Z undoes it.")
         );
+    }
+
+    #[test]
+    fn a_toast_says_which_setting_it_is_about_so_it_can_take_that_one_s_place() {
+        let mut rig = Rig::new();
+        let c = rig.act(Setting::MicBoost, Val::Int(30), Phase::Click);
+        let mut q = Queue::default();
+        q.add(c.expect("a write"));
+        let r = serve(&mut rig.dev, &q);
+        let t = rig.desk.reconcile(&mut rig.m, r).expect("a confirmation");
+        assert_eq!(t.setting, Some(Setting::MicBoost));
+        assert!(t.text.starts_with("Mic boost set to 30 dB."), "{}", t.text);
+        // A read is about no setting: it stands on its own.
+        let mut q = Queue::default();
+        q.add(Cmd::Read { user: true });
+        let r = serve(&mut rig.dev, &q);
+        let t = rig.desk.reconcile(&mut rig.m, r).expect("a read's answer");
+        assert_eq!(t.setting, None);
+        assert_eq!(t.text, "Status read from the G6.");
     }
 
     #[test]
@@ -776,6 +853,7 @@ mod tests {
             maximized: false,
             hover: None,
             pointer: None,
+            now: std::time::Instant::now(),
             pressed: None,
             dragging: None,
             frosted: false,

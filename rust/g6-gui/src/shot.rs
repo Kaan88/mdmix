@@ -5,6 +5,7 @@
 //! The real thing is the system's blur and is only seen in the running app.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use mdshared_app::backdrop::Backdrop;
 use mdshared_text::Bitmap;
@@ -58,6 +59,7 @@ pub fn render(args: &ShotArgs) -> Bitmap {
         maximized: false,
         hover: None,
         pointer: None,
+        now: Instant::now(),
         pressed: None,
         dragging: None,
         frosted: args.backdrop != Backdrop::Off,

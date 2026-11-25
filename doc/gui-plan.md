@@ -296,17 +296,22 @@ G6:** no write in this step went to a device; everything below was checked again
 ## Motion (step G3, written 2026-11-24)
 
 Built on the toolkit's `anim` module (`docs/ANIMATION.md` of markdown-shared-rs), pinned to its pushed `feat/anim`
-(`6064dfb`, which carries the review's fixes; only `PageTransition::apply` needed changing here). **Run:** the user ran
+(`6064dfb`, which carries the review's fixes; only `PageTransition::apply` needed changing here). At the current pin
+(`6017fcd`) the toolkit also has `tooltip::Tooltip`, `anim::Stack` and `settings::pages::Form::draw_animated`, which
+the app uses as written below. **Run:** the user ran
 the release build on Windows on 2026-11-24 and judged the motion good. The tests move a clock by hand and `--shots`
 shows rest only. Reduced motion was not tried live.
 
 - **The loop (`app.rs`):** an `Animator` on a `SystemClock` lives in `fx::Fx`. A frame is drawn between `begin_frame`
-  and `end_frame`; the deadline that gives (the toast's timer joins it through `wake_at`) becomes `WaitUntil`, and
-  `ResumeTimeReached` requests the redraw. With nothing moving, `end_frame` is `None` and the loop is `Wait`, as
-  before: an idle window uses no CPU. The frame interval follows the monitor's refresh rate when winit reports it.
+  and `end_frame`; the deadline that gives (the toasts' own times and the tooltip's delay join it through `wake_at`,
+  folded into `end_frame` by `Fx::wake`) becomes `WaitUntil`, and `ResumeTimeReached` requests the redraw. With
+  nothing moving, `Fx::wake` is `None` and the loop is `Wait`, as before: an idle window uses no CPU. The frame
+  interval follows the monitor's refresh rate when winit reports it. `about_to_wait` ticks the toasts and asks for a
+  frame again when one went; the tip's showing is decided in the frame.
 - **Timings (`anim::fluent`):** hover and press fades 83 ms linear; a control's change (knob, selection fill, slider
   glide, nav highlight) 167 ms point-to-point; the page 250 ms decelerating; the toast and the tooltip enter in 167 ms
-  decelerating and leave in 167 ms and 83 ms.
+  decelerating and leave in 167 ms and 83 ms; the tooltip waits 500 ms (`anim::document::TIP_DELAY`) from the pointer
+  coming to rest.
 - **Pages:** the page area (below the banner, not the sidebar or the title) slides up 20 px and fades in over 250 ms
   while the old page fades out (`PageEffect::SlideFade` from the bottom). Cross-fade was the alternative; SlideFade
   was kept because its edge repeat is invisible here (the page's top row is its own background). The choice was
@@ -320,17 +325,26 @@ shows rest only. Reduced motion was not tried live.
   the master volume) glide to a new reading; Retry, Refresh and card buttons fade their fill. Widgets are named by
   page and draw order, so a value seen for the first time (start, a page's first draw, the first read) is drawn at
   rest with no motion. A layout that changes (a row appears) makes the widgets after it start fresh, which is never wrong.
-- **Overlays:** the toast fades and rises 8 px in and fades out (`Transient`); the tip over a read-only control fades; the
-  settings dialog fades in and out as one picture. The toolkit's `Form` draws its own dimming and has no animator, so
-  the dialog does not rise and the dimming cannot be separated from the card.
+- **Overlays:** the toasts are the toolkit's `anim::Stack` (`Fx::toasts`, `with_max_drawn(3)`): several stand at once,
+  the newest at the bottom and the ones above lifting by `fluent::MOVE` as one goes; each has its own 3.5 s timer, and
+  a second toast about the same setting (`desk::Toast::setting`) replaces that toast in place instead of stacking. The
+  tip is `tooltip::Tooltip`: it shows after 500 ms counted from the pointer coming to rest (`hover_at`, called on each
+  move and each frame), at once over a neighbour while one shows, never on a control just pressed until the pointer
+  leaves it (`press`), and it fades in and out. The settings dialog is drawn with `pages::Form::draw_animated` (its
+  switches and chosen segments slide, its list's hover fills fade) inside the app's own open/close fade; at rest, and
+  under `Policy::Never`, it draws exactly what `Form::draw` draws (`dialog.rs` holds the two pixel for pixel). The
+  dialog still fades as one picture: the form draws its own dimming, so the dimming cannot be separated from the card.
 - **Scrolling:** wheel and keys move a `SmoothScroll` target and the page glides on a spring. There is no thumb drag in
   the window yet; when there is, it uses `jump_to`.
 - **Reduced motion:** `platform::motion_reduced()` (on Windows, Settings, Accessibility, Visual effects, "Animation
-  effects") is read at start, on `ThemeChanged` and when the window gains focus. When on, every value is its target
-  at once and no frame is asked for. `--shot` and the tests that draw a frame use `Fx::still()` (`Policy::Never`), so
-  they do not depend on time; all 56 `--shots` came out byte-identical to the build before this step.
-- **Left:** the dialog's `Form` and the scrollbar do not animate (no hover state for the scrollbar yet); the tooltip has
-  no show delay; a toast showing when a page switches is part of the old page's picture and fades with it.
+  effects") is read at start, on `ThemeChanged`, when the window gains focus, and when the wake given once at start to
+  `platform::watch_motion_reduced` arrives (a `UserEvent::Motion` sent through the loop's `EventLoopProxy`), so a
+  switch made while the window runs reaches the animator. When on, every value is its target at once and no frame is
+  asked for. `--shot` and the tests that draw a frame use `Fx::still()` (`Policy::Never`, and a tooltip delay of zero),
+  so they do not depend on time; all 58 `--shots` came out byte-identical to the build before this step.
+- **Left:** the scrollbar does not animate (no hover state yet); a toast showing when a page switches is part of the
+  old page's picture and fades with it. The toast stack does not use `with_wait_for_lift`, so a new toast enters while
+  the ones above lift into place.
 
 ### G7: the colour picker (2026-11-26, Windows, cargo 1.99.1)
 

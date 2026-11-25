@@ -12,9 +12,11 @@ use mdshared_ui::chrome::{self, TITLE_H, WinButton};
 use mdshared_ui::frost;
 use mdshared_ui::gfx::{Face, Painter, Rect, mix};
 use mdshared_ui::glyph;
-use mdshared_ui::overlay::Bubble;
+use mdshared_ui::overlay::{Bubble, TOAST_H};
 use mdshared_ui::scroll;
 use mdshared_ui::settings::pages::Form;
+use mdshared_ui::tooltip::Over;
+use std::time::Instant;
 
 use crate::facts::{self, DASH};
 use crate::fx::Fx;
@@ -35,6 +37,22 @@ pub fn popup_area(size: (f32, f32)) -> Rect {
     Rect::new(0.0, TITLE_H, size.0.max(0.0), (size.1 - TITLE_H).max(0.0))
 }
 
+/// The gap between two toasts of the stack.
+const TOAST_GAP: f32 = 8.0;
+
+/// The tip over the read-only control at (`x`, `y`) in `hits`: the control's rectangle, which names it to the
+/// toolkit's tooltip (a neighbour's tip takes over at once) and places the bubble, and the reason's words.
+pub fn tip_over(hits: &Hits, x: f32, y: f32) -> Option<Over<Rect>> {
+    match hits.at_rect(x, y) {
+        Some((Hit::Inert(why), r)) => Some(Over {
+            key: r,
+            text: why.text().to_string(),
+            anchor: r,
+        }),
+        _ => None,
+    }
+}
+
 /// What a frame is drawn from.
 pub struct FrameIn<'a> {
     pub model: &'a Model,
@@ -48,6 +66,8 @@ pub struct FrameIn<'a> {
     pub hover: Option<Hit>,
     /// Where the pointer is, for the tip over a control that is read only.
     pub pointer: Option<(f32, f32)>,
+    /// The frame's time, for the tooltip's delay and its next wake.
+    pub now: Instant,
     pub pressed: Option<Hit>,
     /// The slider in hand.
     pub dragging: Option<Setting>,
@@ -78,9 +98,10 @@ pub fn draw_frame(
     let Fx {
         anim,
         page,
-        toast,
+        toasts,
         leaving,
         tip,
+        tip_last,
         menu,
         pick,
     } = fx;
@@ -114,6 +135,7 @@ pub fn draw_frame(
 
     // The dialog: it comes in over the window and goes out the same way, as one picture. (The toolkit's form draws
     // its own dimming, so the whole window's worth fades and nothing rises: a shifted dimming would leave a strip.)
+    // Inside it, the form's own motion: switches and chosen segments slide, its hover fills fade.
     let shown = dialog.is_some();
     if shown {
         *leaving = None;
@@ -123,8 +145,9 @@ pub fn draw_frame(
             .anim
             .presence("dialog", shown, fluent::ENTER, fluent::EXIT);
         let window = Rect::new(0.0, 0.0, w, h);
+        let anim = &mut *env.anim;
         pop(p, window, t, (0.0, 0.0), |p| {
-            form.draw(p, &pal, window, false)
+            form.draw_animated(p, &pal, window, false, anim, "settings")
         });
         if !shown && t <= 0.0 {
             *leaving = None;
@@ -152,30 +175,39 @@ pub fn draw_frame(
             env.hits.add(Hit::Blocked, card);
         }
     }
-    // A device control that writes nothing says why, under the pointer; the tip fades in and out.
+    // A device control that writes nothing says why, under the pointer. The toolkit's tooltip holds the wait (counted
+    // from the pointer coming to rest) and what shows; the tip fades in and out.
+    let tips_allowed = dialog_is_none && leaving.is_none() && menu.is_none() && pick.is_none();
     let over = input
         .pointer
-        .filter(|_| dialog_is_none && leaving.is_none() && menu.is_none() && !picking)
-        .and_then(|(x, y)| match env.hits.at_rect(x, y) {
-            Some((Hit::Inert(why), r)) => Some((r, why)),
-            _ => None,
-        });
-    if over.is_some() {
-        *tip = over;
+        .filter(|_| tips_allowed)
+        .and_then(|(x, y)| tip_over(&env.hits, x, y));
+    let at = input
+        .pointer
+        .unwrap_or((f32::NEG_INFINITY, f32::NEG_INFINITY));
+    tip.hover_at(input.now, over, at);
+    tip.tick(input.now);
+    let showing = tip.shown().map(|o| (o.anchor, o.text.clone()));
+    let is_showing = showing.is_some();
+    if let Some((anchor, text)) = &showing {
+        *tip_last = Some((*anchor, text.clone()));
     }
-    if let Some((anchor, why)) = *tip {
-        let t = env
-            .anim
-            .presence("tip", over.is_some(), fluent::ENTER, fluent::FADE);
-        if t > 0.0 {
-            Bubble::tip(p, why.text(), anchor, w, h).draw_presence(p, &pal, t);
-        } else if over.is_none() {
-            *tip = None;
+    let t = env
+        .anim
+        .presence("tip", is_showing, fluent::ENTER, fluent::FADE);
+    if t > 0.0 {
+        if let Some((anchor, text)) = &tip_last {
+            Bubble::tip(p, text, *anchor, w, h).draw_presence(p, &pal, t);
         }
+    } else {
+        *tip_last = None;
     }
-    // The toast is on top of everything, the dialog too.
-    if let Some((text, t)) = toast.frame(env.anim, "toast") {
-        Bubble::toast(p, text, main).draw_presence(p, &pal, t);
+    // The toasts, newest at the bottom: a stack, each leaving on its own timer, the ones above it lifting into the
+    // room it leaves. It is on top of everything, the dialog too.
+    for s in toasts.frame(env.anim, "toasts", |_| TOAST_H, TOAST_GAP) {
+        let mut b = Bubble::toast(p, &s.item.text, main);
+        b.rect.y -= s.lift;
+        b.draw_presence(p, &pal, s.t);
     }
     FrameOut {
         hits: env.hits,
@@ -650,10 +682,12 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desk::Toast;
     use crate::sample::Sample;
     use mdshared_text::Bitmap;
     use mdshared_ui::gfx::Gfx;
     use mdshared_ui::theme::{DARK, LIGHT};
+    use std::time::Duration;
 
     fn render(
         page: Page,
@@ -686,6 +720,7 @@ mod tests {
             maximized: false,
             hover: None,
             pointer: None,
+            now: Instant::now(),
             pressed: None,
             dragging: None,
             frosted: false,
@@ -798,6 +833,7 @@ mod tests {
             maximized: false,
             hover: None,
             pointer: at,
+            now: Instant::now(),
             pressed: None,
             dragging: None,
             frosted: false,
@@ -840,8 +876,8 @@ mod tests {
 
     // ---- motion, on a clock moved by hand ----
 
+    use mdshared_ui::anim::document::TIP_DELAY;
     use mdshared_ui::anim::{Clock, ManualClock};
-    use std::time::Instant;
 
     /// A window drawn frame by frame on a clock that stands still until it is moved.
     struct Rig {
@@ -867,15 +903,28 @@ mod tests {
             }
         }
 
-        /// A frame `ms` after the last, with the pointer's hover at `hover`; what `end_frame` asks for.
+        /// A frame `ms` after the last, with the pointer's hover at `hover` and no pointer; the next moment the loop
+        /// wants a frame, as the app's `draw` works it out.
         fn frame(
             &mut self,
             page: Page,
             ms: u64,
             hover: Option<Hit>,
         ) -> (Option<Instant>, FrameOut) {
+            self.frame_pointer(page, ms, hover, None)
+        }
+
+        /// The same with the pointer at `pointer`: the tooltip's delay counts from where it comes to rest.
+        fn frame_pointer(
+            &mut self,
+            page: Page,
+            ms: u64,
+            hover: Option<Hit>,
+            pointer: Option<(f32, f32)>,
+        ) -> (Option<Instant>, FrameOut) {
             self.clock.advance_ms(ms);
-            self.fx.anim.begin_frame(self.clock.now());
+            let now = self.clock.now();
+            self.fx.anim.begin_frame(now);
             let input = FrameIn {
                 model: &self.model,
                 prefs: &self.prefs,
@@ -885,7 +934,8 @@ mod tests {
                 scroll: 0.0,
                 maximized: false,
                 hover,
-                pointer: None,
+                pointer,
+                now,
                 pressed: None,
                 dragging: None,
                 frosted: false,
@@ -893,7 +943,7 @@ mod tests {
             let mut p = Painter::new(&mut self.bmp, &mut self.gfx, 1.0);
             let out = draw_frame(&mut p, &input, None, &mut self.fx);
             self.view = out.view;
-            (self.fx.anim.end_frame(), out)
+            (self.fx.wake(), out)
         }
 
         /// What the window does when a page is clicked: the picture of the old one is kept, then the page changes.
@@ -1037,22 +1087,90 @@ mod tests {
         rig.settle(Page::Sbx);
         assert_ne!(rig.bmp.pixels, mid);
         // The toast: in over 167 ms, out over 167 ms, then nothing to wait for.
-        rig.fx.toast.show("Status read from the G6.".into());
-        assert!(
-            rig.frame(Page::Sbx, 16, Some(Hit::Nav(Page::Mixer)))
-                .0
-                .is_some()
-        );
-        rig.settle(Page::Sbx);
+        let until = rig.clock.now() + crate::fx::TOAST_FOR;
+        rig.fx
+            .announce(Toast::plain("Status read from the G6."), until);
+        assert!(rig.frame(Page::Sbx, 16, None).0.is_some());
+        // Frames until its entrance has played; its own time is then the next wake.
+        let mut due = None;
+        for _ in 0..30 {
+            due = rig.frame(Page::Sbx, 16, None).0;
+            if due == Some(until) {
+                break;
+            }
+        }
+        assert_eq!(due, Some(until), "the toast's time is the next wake");
         let shown = rig.bmp.pixels.clone();
-        rig.fx.toast.hide();
-        assert!(
-            rig.frame(Page::Sbx, 16, Some(Hit::Nav(Page::Mixer)))
-                .0
-                .is_some()
-        );
+        rig.fx.toasts.hide_all();
+        assert!(rig.frame(Page::Sbx, 16, None).0.is_some());
         rig.settle(Page::Sbx);
         assert_ne!(rig.bmp.pixels, shown);
-        assert!(rig.fx.toast.alive().is_none());
+        assert!(rig.fx.toasts.is_empty());
+    }
+
+    #[test]
+    fn a_tip_waits_for_the_pointer_to_rest_and_not_after_a_press() {
+        let mut rig = Rig::new();
+        let (_, out) = rig.frame(Page::Playback, 0, None);
+        let (_, r) = out
+            .hits
+            .iter()
+            .find(|(h, _)| matches!(h, Hit::Inert(_)))
+            .expect("a read-only control to rest on");
+        let at = (r.cx(), r.cy());
+        let t0 = rig.clock.now();
+        let ms = TIP_DELAY.as_millis() as u64;
+        rig.frame_pointer(Page::Playback, 0, None, Some(at));
+        assert!(rig.fx.tip.shown().is_none());
+        assert_eq!(rig.fx.tip.deadline(), Some(t0 + TIP_DELAY));
+        // A move on the same control starts the wait again: it counts from the pointer coming to rest.
+        let moved = (at.0 + 2.0, at.1);
+        rig.frame_pointer(Page::Playback, 300, None, Some(moved));
+        assert_eq!(
+            rig.fx.tip.deadline(),
+            Some(t0 + Duration::from_millis(300) + TIP_DELAY)
+        );
+        rig.frame_pointer(Page::Playback, ms - 1, None, Some(moved));
+        assert!(rig.fx.tip.shown().is_none(), "not a moment early");
+        rig.frame_pointer(Page::Playback, 1, None, Some(moved));
+        assert_eq!(rig.fx.tip.shown().map(|o| o.anchor), Some(r));
+        // Pressed: it goes, and it stays away while the pointer rests on that control.
+        rig.fx.tip.press(Some(r));
+        rig.frame_pointer(Page::Playback, 16, None, Some(moved));
+        assert!(rig.fx.tip.shown().is_none());
+        rig.frame_pointer(Page::Playback, 4 * ms, None, Some(moved));
+        assert!(rig.fx.tip.shown().is_none());
+        // Away from it and back: it waits the whole delay again.
+        rig.frame_pointer(Page::Playback, 16, None, Some((5.0, 400.0)));
+        rig.frame_pointer(Page::Playback, 16, None, Some(at));
+        assert!(rig.fx.tip.shown().is_none());
+        rig.frame_pointer(Page::Playback, ms, None, Some(at));
+        assert!(rig.fx.tip.shown().is_some());
+    }
+
+    #[test]
+    fn toasts_expire_and_the_window_sleeps_when_nothing_moves() {
+        let mut rig = Rig::new();
+        rig.frame(Page::Sbx, 0, None);
+        let t0 = rig.clock.now();
+        let until = t0 + crate::fx::TOAST_FOR;
+        rig.fx
+            .announce(Toast::about(Setting::Sbx, "SBX turned on."), until);
+        let mut due = None;
+        for _ in 0..30 {
+            due = rig.frame(Page::Sbx, 16, None).0;
+            if due == Some(until) {
+                break;
+            }
+        }
+        assert_eq!(due, Some(until));
+        // Its time comes: it goes, its exit plays, and then nothing waits at all.
+        rig.clock
+            .advance_ms(crate::fx::TOAST_FOR.as_millis() as u64);
+        assert!(rig.fx.toasts.tick(rig.clock.now()));
+        let frames = rig.settle(Page::Sbx);
+        assert!(frames < 30, "{frames} frames");
+        assert!(rig.fx.toasts.is_empty());
+        assert!(rig.frame(Page::Sbx, 16, None).0.is_none());
     }
 }

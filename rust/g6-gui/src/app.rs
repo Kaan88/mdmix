@@ -1,9 +1,9 @@
 //! The window: winit for the window and its events, softbuffer for the pixels, mdshared-ui for everything drawn.
 //! The loop is this app's own, as mdview's and mdedit's are; the shared frame isn't built yet.
 //!
-//! Motion: a frame is drawn between `Animator::begin_frame` and `end_frame`; the deadline `end_frame` gives (the toast's
-//! timer included, through `wake_at`) is what the loop waits for, and with nothing moving it waits for an event, as
-//! before. See `doc/gui-plan.md`, "Motion".
+//! Motion: a frame is drawn between `Animator::begin_frame` and `end_frame`; the deadline `end_frame` gives (the
+//! toasts' own times and the tooltip's delay included, through `wake_at`) is what the loop waits for, and with nothing
+//! moving it waits for an event, as before. See `doc/gui-plan.md`, "Motion".
 //!
 //! Writes: a click on a bound control, a slider's drag (taken by the pointer until release) or a dropdown's choice is
 //! an intent for `desk::Desk`, which hands the worker the CLI's write for it and reconciles the read-back. Ctrl+Z
@@ -25,6 +25,7 @@ use mdshared_ui::scroll::SmoothScroll;
 use mdshared_ui::settings::pages::Form;
 use mdshared_ui::settings::{Outcome, Value};
 use mdshared_ui::slider::Slider;
+use mdshared_ui::tooltip::Over;
 use mdshared_ui::window;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
@@ -36,10 +37,10 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::corners::Corners;
 
-use crate::desk::{Desk, Phase};
+use crate::desk::{Desk, Phase, Toast};
 use crate::dialog;
 use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
-use crate::fx::Fx;
+use crate::fx::{Fx, TOAST_FOR};
 use crate::intent::{Setting, Val};
 use crate::kit::{Hit, Hits};
 use crate::model::{Conn, Model, Page};
@@ -76,13 +77,15 @@ fn slider_for(s: Setting, shown: Val) -> Option<Slider> {
     Some(if vertical(s) { sl.vertical() } else { sl })
 }
 
-/// What wakes the loop from another thread.
+/// What wakes the loop from another thread (or from the toolkit's watchers).
 pub enum UserEvent {
-    Read(ReadResult),
+    // Boxed: a read is much larger than the motion notice, and the queue hands it over once.
+    Read(Box<ReadResult>),
+    /// The system's wish for less motion may have changed (`platform::watch_motion_reduced`).
+    Motion,
 }
 
 const WHEEL_LINE: f32 = 48.0;
-const TOAST_FOR: Duration = Duration::from_millis(3500);
 
 pub fn run(page: Option<Page>) -> i32 {
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
@@ -93,8 +96,14 @@ pub fn run(page: Option<Page>) -> i32 {
         }
     };
     let proxy = event_loop.create_proxy();
+    // The system's "Animation effects" is watched from the start (on Windows a hidden window of the toolkit's hears
+    // it change); a change wakes the loop, which reads it again.
+    let motion = proxy.clone();
+    platform::watch_motion_reduced(move || {
+        let _ = motion.send_event(UserEvent::Motion);
+    });
     let worker = Worker::start(move |r| {
-        let _ = proxy.send_event(UserEvent::Read(r));
+        let _ = proxy.send_event(UserEvent::Read(Box::new(r)));
     });
     let mut prefs = Prefs::load();
     if let Some(p) = page {
@@ -141,11 +150,10 @@ struct App {
     desk: Desk,
     /// The slider in hand, which has the pointer until it is let go.
     capture: Option<Capture>,
-    /// Motion: the animator and what is kept while it leaves (the toast's text, the closed dialog, an open dropdown).
+    /// Motion: the animator and what is kept while it leaves (the toasts' texts, the tooltip's last anchor, the closed
+    /// dialog, an open dropdown).
     fx: Fx,
     clock: SystemClock,
-    /// When the toast goes away; its fade-out follows.
-    toast_until: Option<Instant>,
     /// When the next frame is due, as the last one said: `None` is "sleep until an event".
     deadline: Option<Instant>,
     drawn_once: bool,
@@ -181,7 +189,6 @@ impl App {
             capture: None,
             fx: Fx::new(),
             clock: SystemClock,
-            toast_until: None,
             deadline: None,
             drawn_once: false,
         }
@@ -204,9 +211,10 @@ impl App {
         }
     }
 
-    fn say(&mut self, text: impl Into<String>) {
-        self.fx.toast.show(text.into());
-        self.toast_until = Some(Instant::now() + TOAST_FOR);
+    /// Shows a toast: one about the same setting takes the place of that setting's own, others join the stack.
+    fn say(&mut self, toast: Toast) {
+        self.fx.announce(toast, Instant::now() + TOAST_FOR);
+        self.redraw();
     }
 
     /// Reads the system's wish for less motion: at start, and when the settings may have changed.
@@ -485,7 +493,8 @@ impl App {
         if (self.bmp.width, self.bmp.height) != (w, h) {
             self.bmp = Bitmap::new(w, h);
         }
-        self.fx.anim.begin_frame(self.clock.now());
+        let now = self.clock.now();
+        self.fx.anim.begin_frame(now);
         let pal = self.pal();
         let logical = self.logical();
         let (content, view) = (self.max_scroll + self.view.h, self.view.h);
@@ -514,6 +523,7 @@ impl App {
             } else {
                 self.pointer
             },
+            now,
             pressed: self.pressed,
             dragging: self.capture.as_ref().map(|c| c.setting),
             frosted: self.frost.key().is_some(),
@@ -545,11 +555,8 @@ impl App {
             self.drawn_once = true;
             window.set_visible(true);
         }
-        // The toast's timer rides on the animator's deadline: one wake-up serves both.
-        if let Some(until) = self.toast_until {
-            self.fx.anim.wake_at(until);
-        }
-        self.deadline = self.fx.anim.end_frame();
+        // The toasts' own times and the tooltip's delay ride on the animator's deadline: one wake-up serves them all.
+        self.deadline = self.fx.wake();
     }
 
     fn present(&mut self) {
@@ -617,11 +624,28 @@ impl App {
             changed |= f.pointer_move(x, y);
         } else {
             changed |= before != self.hits.at_rect(x, y);
+            // The tip's wait counts from the pointer coming to rest, so a move on the same control starts it again
+            // even when nothing drawn changed.
+            let over = self.tip_over(x, y);
+            changed |= self.fx.tip.hover_at(Instant::now(), over, (x, y));
         }
         self.update_cursor(x, y);
         if changed {
             self.redraw();
         }
+    }
+
+    /// The tip over the read-only control at (`x`, `y`), from the regions the last frame recorded; nothing while a
+    /// dialog, a menu, the colour picker or a closing dialog has the window.
+    fn tip_over(&self, x: f32, y: f32) -> Option<Over<Rect>> {
+        if self.dialog.is_some()
+            || self.fx.leaving.is_some()
+            || self.fx.menu.is_some()
+            || self.fx.pick.is_some()
+        {
+            return None;
+        }
+        crate::frame::tip_over(&self.hits, x, y)
     }
 
     /// The pointer's shape at (`x`, `y`): a resize edge, not-allowed over a read-only control, or the arrow.
@@ -685,6 +709,8 @@ impl App {
             self.picker_press(x, y, clicks);
             return;
         }
+        // A control just pressed shows no tip until the pointer has left it.
+        self.fx.tip.press(self.hits.at_rect(x, y).map(|(_, r)| r));
         if let (Some(dir), Some(w)) = (self.edge(x, y), &self.window) {
             let _ = w.drag_resize_window(dir);
             return;
@@ -973,7 +999,11 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, _: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Read(r) => self.read_done(r),
+            UserEvent::Read(r) => self.read_done(*r),
+            UserEvent::Motion => {
+                self.sync_motion();
+                self.redraw();
+            }
         }
     }
 
@@ -1078,24 +1108,26 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
         // A dragged slider's value that waited out the throttle goes now.
-        if let Some(cmd) = self.desk.tick(&self.model, Instant::now()) {
+        if let Some(cmd) = self.desk.tick(&self.model, now) {
             self.send(cmd);
             self.redraw();
         }
-        // The toast's time is up: let it go, and its exit plays from the next frame.
-        if let Some(until) = self.toast_until
-            && Instant::now() >= until
-        {
-            self.toast_until = None;
-            self.fx.toast.hide();
+        // Whichever toast's time is up goes, and its exit plays from the next frame.
+        if self.fx.toasts.tick(now) {
             self.redraw();
         }
         // Something moving or a timer: wake for it. Nothing: sleep until an event, using no CPU.
-        let due = match (self.deadline, self.desk.due()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let due = [
+            self.deadline,
+            self.desk.due(),
+            self.fx.toasts.deadline(),
+            self.fx.tip.deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         match due {
             Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
             None => event_loop.set_control_flow(ControlFlow::Wait),

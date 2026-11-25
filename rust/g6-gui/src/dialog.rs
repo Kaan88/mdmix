@@ -88,7 +88,10 @@ mod tests {
     use super::*;
     use crate::sample::Sample;
     use mdshared_text::Bitmap;
+    use mdshared_ui::anim::{Animator, Policy};
     use mdshared_ui::gfx::{Gfx, Painter, Rect};
+    use mdshared_ui::theme::LIGHT;
+    use std::time::Instant;
 
     #[test]
     fn both_pages_fit_the_sizes_the_window_allows() {
@@ -110,5 +113,32 @@ mod tests {
         assert_eq!(f.page_names(), ["Appearance", "Device"]);
         assert_eq!(f.page_of(READ), Some(1));
         assert_eq!(f.page_of(THEME), Some(0));
+    }
+
+    /// The dialog in motion, drawn where nothing moves (a shot, a test), is the plain draw pixel for pixel: its
+    /// switches and segments stand where their values are, and no hover fill is left half in.
+    #[test]
+    fn the_animated_dialog_at_rest_is_the_plain_draw() {
+        let prefs = Prefs::default();
+        let model = Sample::Busy.model();
+        let size = (900.0, 700.0);
+        let window = Rect::new(0.0, 0.0, size.0, size.1);
+        let pixels = |animated: bool| {
+            let mut bmp = Bitmap::new(size.0 as u32, size.1 as u32);
+            let mut gfx = Gfx::new();
+            let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+            let mut f = form(&prefs, &model);
+            if animated {
+                let mut anim = Animator::new();
+                anim.set_policy(Policy::Never);
+                anim.begin_frame(Instant::now());
+                f.draw_animated(&mut p, &LIGHT, window, false, &mut anim, "settings");
+                assert!(anim.end_frame().is_none(), "at rest asks for no frame");
+            } else {
+                f.draw(&mut p, &LIGHT, window, false);
+            }
+            bmp.pixels
+        };
+        assert_eq!(pixels(false), pixels(true));
     }
 }
