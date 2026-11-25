@@ -169,6 +169,9 @@ pub struct Env<'a> {
     pub model: &'a Model,
     pub hits: Hits,
     pub hover: Option<Hit>,
+    /// Where the pointer is. Two controls can share a hit (the output switch in the sidebar and on Playback): the
+    /// hover is drawn only on the one under the pointer.
+    pub pointer: Option<(f32, f32)>,
     pub pressed: Option<Hit>,
     /// The window's animated values. Every widget that moves asks it for its current value while it draws.
     pub anim: &'a mut Animator,
@@ -193,6 +196,7 @@ impl<'a> Env<'a> {
             model,
             hits: Hits::default(),
             hover,
+            pointer: None,
             pressed,
             anim,
             dragging: None,
@@ -242,6 +246,16 @@ impl<'a> Env<'a> {
 
     pub fn is_hover(&self, hit: Hit) -> bool {
         self.hover == Some(hit)
+    }
+
+    /// Which of a segmented control's choices is hovered: the hovered hit, and the pointer over this control (`r`),
+    /// not another control with the same hits.
+    pub fn seg_hover(&self, hits: &[Hit], r: Rect) -> Option<usize> {
+        let (x, y) = self.pointer?;
+        if !r.contains(x, y) {
+            return None;
+        }
+        hits.iter().position(|h| h.acts() && self.hover == Some(*h))
     }
 
     pub fn is_pressed(&self, hit: Hit) -> bool {
@@ -1250,9 +1264,7 @@ fn draw_ctl(
                 (None, Ok(_)) => Some((0..labels.len()).map(|k| seg_hit(env, *bind, k)).collect()),
                 (None, Err(_)) => None,
             };
-            let hovered = hits
-                .as_ref()
-                .and_then(|hs| hs.iter().position(|h| h.acts() && env.hover == Some(*h)));
+            let hovered = hits.as_ref().and_then(|hs| env.seg_hover(hs, seg_r));
             let rects = env.seg(
                 p,
                 pal,
@@ -1839,6 +1851,24 @@ mod tests {
         let (read, deadline) = seg_frame(&clock, &mut anim, 16, Some(1), None);
         assert_eq!(read, seg_at_rest(Some(1), None));
         assert!(deadline.is_none());
+    }
+
+    #[test]
+    fn two_switches_with_the_same_hits_hover_only_the_one_under_the_pointer() {
+        let m = crate::sample::Sample::Busy.model();
+        let mut anim = Animator::new();
+        let hits = [
+            Hit::Set(Setting::Output, Val::Int(0)),
+            Hit::Set(Setting::Output, Val::Int(1)),
+        ];
+        let mut env = Env::new(mdshared_ui::theme::DARK, &m, Some(hits[0]), None, &mut anim);
+        let (side, page) = (
+            Rect::new(0.0, 0.0, 200.0, 30.0),
+            Rect::new(400.0, 300.0, 200.0, 30.0),
+        );
+        env.pointer = Some((50.0, 15.0));
+        assert_eq!(env.seg_hover(&hits, side), Some(0));
+        assert_eq!(env.seg_hover(&hits, page), None);
     }
 
     #[test]

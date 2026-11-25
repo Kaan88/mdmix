@@ -88,7 +88,15 @@ pub struct Desk {
     pub undo: Option<Undo>,
     /// The pending values a read left unanswered, with their follow-up schedule.
     settling: BTreeMap<Setting, Settle>,
+    /// A read left values out and the window shows them kept from before: a quiet read again at this time, so what
+    /// is on screen is soon the G6's own again.
+    refresh_at: Option<Instant>,
+    /// How many of those reads in a row have come back still leaving something out.
+    refreshes: u8,
 }
+
+/// How many quiet reads a status that leaves values out gets before the kept values are left as they are.
+const REFRESH_TRIES: u8 = 3;
 
 /// The toast after a write: what happened, worded for a person, and the setting it is about. A second toast about
 /// the same setting replaces the first in place; one about nothing (a read, a general refusal) stands on its own.
@@ -311,6 +319,12 @@ impl Desk {
                 r.user.then(|| Toast::plain(why))
             };
         }
+        if !m.stale {
+            self.refresh_at = None;
+            self.refreshes = 0;
+        } else if self.refresh_at.is_none() && self.refreshes < REFRESH_TRIES {
+            self.refresh_at = Some(now + SETTLE_AT[0] * (1 << self.refreshes));
+        }
         let mut good = None;
         let mut bad = None;
         for w in r.writes {
@@ -417,7 +431,7 @@ impl Desk {
     /// When a follow-up read (or the give-up) is due, for the window's timer. `None` when nothing is settling, so an
     /// idle window waits for an event.
     pub fn settle_due(&self) -> Option<Instant> {
-        let mut due: Option<Instant> = None;
+        let mut due: Option<Instant> = self.refresh_at;
         for st in self.settling.values() {
             if let Some(at) = SETTLE_AT.get(usize::from(st.reads)) {
                 let at = st.start + *at;
@@ -432,6 +446,11 @@ impl Desk {
     /// The follow-up read when one is due now: one read serves every setting that is waiting. `None` before its time.
     pub fn follow_up(&mut self, now: Instant) -> Option<Cmd> {
         let mut due = false;
+        if self.refresh_at.is_some_and(|at| now >= at) {
+            self.refresh_at = None;
+            self.refreshes += 1;
+            due = true;
+        }
         for st in self.settling.values_mut() {
             if let Some(at) = SETTLE_AT.get(usize::from(st.reads))
                 && now >= st.start + *at
@@ -664,6 +683,44 @@ mod tests {
             .iter()
             .map(|h| h.as_str().unwrap().trim_end_matches('0').to_string())
             .collect()
+    }
+
+    #[test]
+    fn a_read_that_leaves_values_out_is_read_again_quietly() {
+        let t0 = Instant::now();
+        let mut m = Sample::Busy.model();
+        let mut desk = Desk::default();
+        let read = |status: DeviceStatus| ReadResult {
+            user: false,
+            status: Ok(status),
+            mixer: None,
+            writes: Vec::new(),
+        };
+        let full = m.status.clone();
+        let partial = DeviceStatus {
+            decoder_mode: None,
+            ..full.clone()
+        };
+        assert_eq!(desk.reconcile(&mut m, read(partial.clone()), t0), None);
+        assert!(m.stale && m.status.decoder_mode.is_some());
+        let due = desk.settle_due().unwrap();
+        assert!(desk.follow_up(t0).is_none());
+        assert!(matches!(
+            desk.follow_up(due),
+            Some(Cmd::Read { user: false })
+        ));
+        // Still left out: a few more tries, further apart, then no more.
+        let mut at = due;
+        for _ in 1..REFRESH_TRIES {
+            desk.reconcile(&mut m, read(partial.clone()), at);
+            at = desk.settle_due().unwrap();
+            assert!(desk.follow_up(at).is_some());
+        }
+        desk.reconcile(&mut m, read(partial), at);
+        assert_eq!(desk.settle_due(), None);
+        // A full answer ends it.
+        desk.reconcile(&mut m, read(full), at);
+        assert!(!m.stale && desk.settle_due().is_none());
     }
 
     #[test]
@@ -950,7 +1007,7 @@ mod tests {
         rig.run(vec![c]);
         // The read-back left the output out: the old one stays in the model for the picture, marked unanswered.
         assert_eq!(rig.m.status.output.as_deref(), Some("Headphones"));
-        assert!(rig.m.output_unanswered);
+        assert!(rig.m.output_unanswered());
         assert_eq!(Setting::Output.confirmed(Val::Int(0), &rig.m), None);
         // The control shows what was asked for, pending, and nothing is said: it is not a refusal yet.
         assert!(rig.desk.pending.contains_key(&Setting::Output));
@@ -977,7 +1034,7 @@ mod tests {
         rig.later(4000);
         assert!(rig.follow(), "the 7 s read is due");
         assert!(rig.desk.pending.is_empty());
-        assert!(!rig.m.output_unanswered);
+        assert!(!rig.m.output_unanswered());
         assert_eq!(rig.m.status.output.as_deref(), Some("Speakers"));
         assert_eq!(rig.toast.as_deref(), Some("Output set to Speakers."));
         assert_eq!(rig.desk.settle_due(), None);

@@ -110,6 +110,7 @@ pub fn draw_frame(
     } = fx;
     let mut env = Env::new(pal, input.model, input.hover, input.pressed, anim);
     env.dragging = input.dragging;
+    env.pointer = input.pointer;
     p.fill(Rect::new(0.0, 0.0, w, h), pal.page);
 
     let title = Rect::new(0.0, 0.0, w, TITLE_H);
@@ -381,9 +382,7 @@ fn draw_sidebar(p: &mut Painter, env: &mut Env, input: &FrameIn, r: Rect) {
     let out_hits: Vec<Hit> = (0..facts::OUTPUTS.len())
         .map(|k| kit::seg_hit(env, bind, k))
         .collect();
-    let hovered = out_hits
-        .iter()
-        .position(|h| h.acts() && env.hover == Some(*h));
+    let hovered = env.seg_hover(&out_hits, out_r);
     let rects = kit::draw_seg_with(
         p,
         &live,

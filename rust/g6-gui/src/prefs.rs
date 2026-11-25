@@ -1,4 +1,4 @@
-//! The app's own settings (theme, backdrop, corners, the page, the window's size), kept in the toolkit's settings
+//! The app's own settings (theme, backdrop, corners, the page, the window's size and place), kept in the toolkit's settings
 //! file layer. Nothing here is a device setting.
 
 use std::path::PathBuf;
@@ -76,6 +76,10 @@ pub struct Prefs {
     pub page: Page,
     /// The window's inner size in logical px, when it was saved.
     pub size: Option<(u32, u32)>,
+    /// The window's top-left corner on the desktop in physical px, when it was saved.
+    pub pos: Option<(i32, i32)>,
+    /// The window was maximized when it closed.
+    pub maximized: bool,
 }
 
 impl Default for Prefs {
@@ -87,6 +91,8 @@ impl Default for Prefs {
             corners: Corners::Round,
             page: Page::Sbx,
             size: None,
+            pos: None,
+            maximized: false,
         }
     }
 }
@@ -95,6 +101,7 @@ impl Prefs {
     pub fn parse(text: &str) -> Prefs {
         let mut p = Prefs::default();
         let (mut w, mut h) = (None, None);
+        let (mut x, mut y) = (None, None);
         for (k, v) in settings::pairs(text) {
             let v = v.trim();
             match k {
@@ -106,8 +113,15 @@ impl Prefs {
                 "page" => p.page = Page::from_key(v).unwrap_or(p.page),
                 "width" => w = v.parse().ok(),
                 "height" => h = v.parse().ok(),
+                "x" => x = v.parse().ok(),
+                "y" => y = v.parse().ok(),
+                "maximized" => p.maximized = v == "true",
                 _ => {}
             }
+        }
+        if let (Some(x), Some(y)) = (x, y) {
+            p.pos =
+                Some((x, y)).filter(|&(x, y): &(i32, i32)| x.abs() <= 65536 && y.abs() <= 65536);
         }
         if let (Some(w), Some(h)) = (w, h) {
             p.size = Some((w, h))
@@ -126,7 +140,20 @@ impl Prefs {
             w.line("width", &width.to_string());
             w.line("height", &height.to_string());
         }
+        if let Some((x, y)) = self.pos {
+            w.line("x", &x.to_string());
+            w.line("y", &y.to_string());
+        }
+        if self.maximized {
+            w.line("maximized", "true");
+        }
         w.finish()
+    }
+
+    /// Where the window opens: the saved place, if a monitor still shows enough of its caption to grab it.
+    /// `monitors` are (x, y, width, height) in physical px.
+    pub fn place_on(&self, monitors: &[(i32, i32, u32, u32)]) -> Option<(i32, i32)> {
+        self.pos.filter(|&p| on_screen(p, monitors))
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -156,6 +183,16 @@ impl Prefs {
 /// The smallest window, in logical px: the sidebar and a page narrow enough to be read.
 pub const MIN: (u32, u32) = (760, 600);
 
+/// Whether a window whose top-left is at `pos` has a grabbable piece of its caption (100 by 24 px from its corner,
+/// after the left 40) on one of `monitors`.
+fn on_screen(pos: (i32, i32), monitors: &[(i32, i32, u32, u32)]) -> bool {
+    let (x, y) = (i64::from(pos.0) + 40, i64::from(pos.1));
+    monitors.iter().any(|&(mx, my, mw, mh)| {
+        let (mx, my) = (i64::from(mx), i64::from(my));
+        x >= mx && x + 100 <= mx + i64::from(mw) && y >= my && y + 24 <= my + i64::from(mh)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +219,8 @@ backdrop=off
             corners: Corners::Small,
             page: Page::Mixer,
             size: Some((1000, 700)),
+            pos: Some((-1200, 40)),
+            maximized: true,
         };
         assert_eq!(Prefs::parse(&p.to_text()), p);
     }
@@ -193,6 +232,18 @@ backdrop=off
         );
         assert_eq!(p, Prefs::default());
         assert_eq!(Prefs::parse(""), Prefs::default());
+    }
+
+    #[test]
+    fn a_place_is_kept_only_where_a_monitor_shows_its_caption() {
+        let mons = [(0, 0, 1920, 1080), (-1280, 100, 1280, 1024)];
+        assert!(on_screen((100, 100), &mons));
+        assert!(on_screen((-1200, 200), &mons));
+        // A monitor that was unplugged.
+        assert!(!on_screen((2500, 100), &mons));
+        // Only the very edge of the caption showing is not enough to grab it.
+        assert!(!on_screen((1900, 100), &mons));
+        assert!(!on_screen((100, -100), &mons));
     }
 
     #[test]

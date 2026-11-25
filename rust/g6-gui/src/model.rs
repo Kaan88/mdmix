@@ -198,10 +198,13 @@ pub struct Model {
     pub have_status: bool,
     pub conn: Conn,
     pub mixer: Option<MixerView>,
-    /// The last read left the output out (the G6 settling after a switch). `status.output` keeps the value known
-    /// before it, but that value is stale: `Setting::confirmed` says "unanswered" rather than "the device has
-    /// another one", so a pending switch can keep waiting for a real answer.
-    pub output_unanswered: bool,
+    /// What the last read actually answered. A read can leave queries out (the G6 settling after a write, an output
+    /// switch above all); `status` keeps the value known before for each of them, so nothing blanks, but a kept
+    /// value is not an answer: `Setting::confirmed` looks here and says "unanswered" rather than "the device has
+    /// another one", so a pending value keeps waiting for a real answer.
+    pub heard: DeviceStatus,
+    /// Some value on screen was kept from an earlier read because the last one left it out.
+    pub stale: bool,
     /// The static colour written last in this session: the G6 can't be asked for it.
     pub colour: Option<[u8; 3]>,
 }
@@ -214,7 +217,8 @@ impl Model {
             have_status: false,
             conn: Conn::Reading,
             mixer: None,
-            output_unanswered: false,
+            heard: DeviceStatus::default(),
+            stale: false,
             colour: None,
         }
     }
@@ -224,11 +228,12 @@ impl Model {
     pub fn cached(mut status: DeviceStatus, mixer: Option<MixerView>) -> Model {
         facts::drop_direct_zeros(&mut status);
         Model {
+            heard: status.clone(),
             status,
             have_status: true,
             conn: Conn::Cached,
             mixer,
-            output_unanswered: false,
+            stale: false,
             colour: None,
         }
     }
@@ -236,11 +241,12 @@ impl Model {
     pub fn with_status(mut status: DeviceStatus, mixer: Option<MixerView>) -> Model {
         facts::drop_direct_zeros(&mut status);
         Model {
+            heard: status.clone(),
             status,
             have_status: true,
             conn: Conn::Connected,
             mixer,
-            output_unanswered: false,
+            stale: false,
             colour: None,
         }
     }
@@ -250,14 +256,13 @@ impl Model {
     pub fn apply(&mut self, read: Result<DeviceStatus, String>, mixer: Option<MixerView>) {
         match read {
             Ok(mut status) => {
+                let mut heard = status.clone();
+                facts::drop_direct_zeros(&mut heard);
+                // What this read left out keeps the value known before, so a control never blanks while the G6
+                // settles; `heard` says what was really answered.
+                self.stale = self.have_status && keep_known(&mut status, &self.status);
                 facts::drop_direct_zeros(&mut status);
-                // The output is always one or the other: a read it is missing from (the G6 still settling after a
-                // switch) keeps the one known, rather than showing neither. It is marked unanswered so a pending
-                // switch keeps waiting instead of being read as a different value.
-                self.output_unanswered = status.output.is_none();
-                if status.output.is_none() {
-                    status.output = self.status.output.take();
-                }
+                self.heard = heard;
                 self.status = status;
                 self.have_status = true;
                 self.conn = Conn::Connected;
@@ -267,10 +272,75 @@ impl Model {
         }
     }
 
+    /// The last read left the output out: the one shown is kept from before.
+    #[cfg(test)]
+    pub fn output_unanswered(&self) -> bool {
+        self.have_status && self.heard.output.is_none()
+    }
+
     /// Direct mode is on: SBX and Scout Mode are bypassed.
     pub fn direct(&self) -> bool {
         self.status.direct_mode == Some(true)
     }
+}
+
+/// Fills what `new` left out with what `old` had. Returns whether anything was filled.
+fn keep_known(new: &mut DeviceStatus, old: &DeviceStatus) -> bool {
+    fn keep<T: Clone>(n: &mut Option<T>, o: &Option<T>) -> bool {
+        let fill = n.is_none() && o.is_some();
+        if fill {
+            n.clone_from(o);
+        }
+        fill
+    }
+    let mut kept = false;
+    // Inside a part that was answered, each value on its own.
+    if let (Some(n), Some(o)) = (new.sbx.as_mut(), old.sbx.as_ref()) {
+        for (n, o) in n.iter_mut().zip(o) {
+            kept |= keep(&mut n.enabled, &o.enabled);
+            kept |= keep(&mut n.level, &o.level);
+        }
+    }
+    if let (Some(n), Some(o)) = (new.eq_bands_db.as_mut(), old.eq_bands_db.as_ref()) {
+        for (n, o) in n.iter_mut().zip(o) {
+            kept |= keep(n, o);
+        }
+    }
+    if let (Some(n), Some(o)) = (new.recording.as_mut(), old.recording.as_ref()) {
+        kept |= keep(&mut n.noise_reduction, &o.noise_reduction);
+        kept |= keep(&mut n.noise_reduction_level, &o.noise_reduction_level);
+        kept |= keep(
+            &mut n.acoustic_echo_cancellation,
+            &o.acoustic_echo_cancellation,
+        );
+        kept |= keep(&mut n.smart_volume, &o.smart_volume);
+        kept |= keep(&mut n.mic_eq, &o.mic_eq);
+    }
+    kept |= keep(&mut new.firmware, &old.firmware);
+    kept |= keep(&mut new.output, &old.output);
+    kept |= keep(&mut new.decoder_mode, &old.decoder_mode);
+    kept |= keep(&mut new.dac_filter, &old.dac_filter);
+    kept |= keep(&mut new.direct_mode, &old.direct_mode);
+    kept |= keep(&mut new.spdif_direct, &old.spdif_direct);
+    kept |= keep(
+        &mut new.line_out_headphone_virtualization,
+        &old.line_out_headphone_virtualization,
+    );
+    kept |= keep(&mut new.rgb_enabled, &old.rgb_enabled);
+    kept |= keep(&mut new.ring_enabled, &old.ring_enabled);
+    kept |= keep(&mut new.mode_flags, &old.mode_flags);
+    kept |= keep(&mut new.sbx, &old.sbx);
+    kept |= keep(&mut new.smart_volume_mode, &old.smart_volume_mode);
+    kept |= keep(&mut new.eq_enabled, &old.eq_enabled);
+    kept |= keep(&mut new.eq_preamp_db, &old.eq_preamp_db);
+    kept |= keep(&mut new.eq_bands_db, &old.eq_bands_db);
+    kept |= keep(&mut new.mic_boost_db, &old.mic_boost_db);
+    kept |= keep(&mut new.sbx_enabled, &old.sbx_enabled);
+    kept |= keep(&mut new.scout_mode, &old.scout_mode);
+    kept |= keep(&mut new.voice_clarity, &old.voice_clarity);
+    kept |= keep(&mut new.recording, &old.recording);
+    kept |= keep(&mut new.mic_eq_preset, &old.mic_eq_preset);
+    kept
 }
 
 #[cfg(test)]
@@ -392,11 +462,11 @@ mod tests {
             ..DeviceStatus::default()
         };
         m.apply(Ok(s.clone()), None);
-        assert!(!m.output_unanswered);
+        assert!(!m.output_unanswered());
         m.apply(Ok(DeviceStatus { output: None, ..s }), None);
         assert_eq!(m.status.output.as_deref(), Some("Headphones"));
         // Kept for the picture, but not an answer from this read.
-        assert!(m.output_unanswered);
+        assert!(m.output_unanswered());
         m.apply(
             Ok(DeviceStatus {
                 output: Some("Speakers".into()),
@@ -404,7 +474,36 @@ mod tests {
             }),
             None,
         );
-        assert!(!m.output_unanswered);
+        assert!(!m.output_unanswered());
+    }
+
+    #[test]
+    fn a_read_that_leaves_values_out_keeps_the_ones_known() {
+        let mut m = Model::starting();
+        let s = DeviceStatus {
+            output: Some("Speakers".into()),
+            decoder_mode: Some("Normal".into()),
+            eq_bands_db: Some([Some(1.0); 10]),
+            ..DeviceStatus::default()
+        };
+        m.apply(Ok(s), None);
+        assert!(!m.stale);
+        let mut bands = [Some(2.0); 10];
+        bands[3] = None;
+        m.apply(
+            Ok(DeviceStatus {
+                output: Some("Headphones".into()),
+                eq_bands_db: Some(bands),
+                ..DeviceStatus::default()
+            }),
+            None,
+        );
+        assert!(m.stale);
+        assert_eq!(m.status.output.as_deref(), Some("Headphones"));
+        assert_eq!(m.status.decoder_mode.as_deref(), Some("Normal"));
+        assert_eq!(m.heard.decoder_mode, None);
+        let b = m.status.eq_bands_db.unwrap();
+        assert_eq!((b[0], b[3]), (Some(2.0), Some(1.0)));
     }
 
     #[test]

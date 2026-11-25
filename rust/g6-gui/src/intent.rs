@@ -342,8 +342,12 @@ impl Setting {
     /// What the device (or, for the colour, this session) says the setting is. `None`: not read, not known, or not
     /// one of the values the window writes.
     pub fn current(self, m: &Model) -> Option<Val> {
+        self.value_in(&m.status, m.colour)
+    }
+
+    /// The value of the setting in a status (the colour is the session's own, never read).
+    fn value_in(self, s: &DeviceStatus, colour: Option<[u8; 3]>) -> Option<Val> {
         use Setting as S;
-        let s = &m.status;
         let on = |b: Option<bool>| b.map(Val::On);
         let rec = s.recording.unwrap_or_default();
         let index = |i: Option<usize>| i.map(|i| Val::Int(i as i64));
@@ -393,7 +397,7 @@ impl Setting {
                     .and_then(|p| mic_eq_presets().iter().position(|x| *x == p)),
             ),
             S::Lighting => on(s.rgb_enabled),
-            S::Colour => m.colour.map(rgb_val),
+            S::Colour => colour.map(rgb_val),
             S::VolumeRing => on(s.ring_enabled),
         }
     }
@@ -402,7 +406,9 @@ impl Setting {
     /// say. A preset counts as there when the curve is its curve, whichever name the curve is found under.
     pub fn confirmed(self, v: Val, m: &Model) -> Option<bool> {
         if self == Setting::EqPreset {
-            let (Val::Int(i), Some(out)) = (v, facts::output_of(&m.status)) else {
+            // Only a curve this read answered says which preset is there.
+            facts::eq_curve(&m.heard)?;
+            let (Val::Int(i), Some(out)) = (v, facts::output_of(&m.heard)) else {
                 return None;
             };
             let id = eq_presets::preset_ids().nth(usize::try_from(i).ok()?)?;
@@ -416,11 +422,9 @@ impl Setting {
         if self.unreadable() {
             return None;
         }
-        // The output was left out of the read that followed the write: the model still shows the one from before,
-        // but that is not an answer, so the pending switch keeps waiting for one.
-        if self == Setting::Output && m.output_unanswered {
-            return None;
-        }
+        // The last read left this setting out: the model still shows the value from before, but that is not an
+        // answer, so a pending value keeps waiting for one.
+        self.value_in(&m.heard, m.colour)?;
         self.current(m).map(|c| c == v)
     }
 

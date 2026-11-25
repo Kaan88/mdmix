@@ -28,7 +28,7 @@ use mdshared_ui::slider::Slider;
 use mdshared_ui::tooltip::Over;
 use mdshared_ui::window;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -888,6 +888,12 @@ impl App {
     fn quit(&mut self, event_loop: &ActiveEventLoop) {
         // A minimised window reports a size of 0 or the icon's: only a normal window's size is kept, and only if it
         // is one the window can have.
+        // A maximized window keeps the size and place it had before, and opens maximized again.
+        if let Some(w) = &self.window
+            && w.is_minimized() != Some(true)
+        {
+            self.prefs.maximized = w.is_maximized();
+        }
         if let Some(w) = &self.window
             && !w.is_maximized()
             && w.is_minimized() != Some(true)
@@ -896,6 +902,9 @@ impl App {
             let size = (s.width.round() as u32, s.height.round() as u32);
             if size.0 >= prefs::MIN.0 && size.1 >= prefs::MIN.1 {
                 self.prefs.size = Some(size);
+            }
+            if let Ok(p) = w.outer_position() {
+                self.prefs.pos = Some((p.x, p.y));
             }
         }
         self.prefs.save();
@@ -992,7 +1001,20 @@ impl ApplicationHandler<UserEvent> for App {
             .with_min_inner_size(LogicalSize::new(
                 f64::from(prefs::MIN.0),
                 f64::from(prefs::MIN.1),
-            ));
+            ))
+            .with_maximized(self.prefs.maximized);
+        // The place it closed at, while that is still on a monitor (one may have been unplugged since).
+        let monitors: Vec<(i32, i32, u32, u32)> = event_loop
+            .available_monitors()
+            .map(|m| {
+                let (p, s) = (m.position(), m.size());
+                (p.x, p.y, s.width, s.height)
+            })
+            .collect();
+        let attributes = match self.prefs.place_on(&monitors) {
+            Some((x, y)) => attributes.with_position(PhysicalPosition::new(x, y)),
+            None => attributes,
+        };
         let attributes = window::identify(attributes, "g6-gui", None);
         #[cfg(windows)]
         let attributes = {
