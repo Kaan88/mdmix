@@ -4,11 +4,14 @@
 //! A value the G6 did not give shows as "—", a choice with no answer has nothing chosen, and a slider with no
 //! value has its groove alone.
 
+use std::time::Instant;
+
 use g6_proto::equalizer::{EQ_BAND_FREQS, EQ_DB_MAX, EQ_DB_MIN};
 use g6_proto::status::DeviceStatus;
 use g6_proto::types::SbxEffect;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
+use mdshared_ui::meter::{LevelMeter, draw_meter};
 
 use crate::facts::{self, DASH};
 use crate::icons;
@@ -17,6 +20,7 @@ use crate::kit::{
     self, Bind, Card, Ctl, Draw, Env, Hit, Item, Part, Tone, Why, dd, dimmed, live_seg, row, seg,
     seg_sm, value,
 };
+use crate::levels::{Meters, NO_METER};
 use crate::model::{MONITORING, MixerView, Model, Page, RECORDING, Strip};
 use crate::prefs::{Prefs, Theme};
 use mdshared_app::backdrop::Backdrop;
@@ -94,13 +98,20 @@ pub fn tags(page: Page, m: &Model) -> Vec<(String, Tone)> {
     out
 }
 
-/// The cards of a page. The signal chain isn't made of cards: see [`draw_chain`].
-pub fn cards(page: Page, m: &Model, prefs: &Prefs) -> Vec<Card<'static>> {
+/// The cards of a page. The signal chain isn't made of cards: see [`draw_chain`]. `meters` is the live playback
+/// level (Windows only); without a source the Mixer's strips say so rather than show a level.
+pub fn cards(
+    page: Page,
+    m: &Model,
+    prefs: &Prefs,
+    meters: &Meters,
+    now: Instant,
+) -> Vec<Card<'static>> {
     match page {
         Page::Sbx => sbx(m),
         Page::Equalizer => equalizer(m),
         Page::Playback => playback(m),
-        Page::Mixer => mixer(m),
+        Page::Mixer => mixer(m, meters, now),
         Page::Microphone => microphone(m),
         Page::Lighting => lighting(m),
         Page::Settings => settings(m, prefs),
@@ -497,7 +508,7 @@ fn playback(m: &Model) -> Vec<Card<'static>> {
 
 // ---- Mixer -------------------------------------------------------------------------------------
 
-fn mixer(m: &Model) -> Vec<Card<'static>> {
+fn mixer(m: &Model, meters: &Meters, now: Instant) -> Vec<Card<'static>> {
     let s = &m.status;
     let mx = m.mixer.clone();
     let strip_of = |f: &dyn Fn(&MixerView) -> Strip| mx.as_ref().map(f);
@@ -512,10 +523,14 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
         strip_of(&|v| v.master),
     )];
     let mix_muted = mx.as_ref().and_then(|v| v.mix_muted);
+    // The live playback level, copied into the strip's drawing: only the Playback strip has a source today. Line In,
+    // Mic, SPDIF and What U Hear have no meter yet, so they say so rather than show a fake level.
+    let level = meters.source().map(|(l, r)| (l.clone(), r.clone()));
     let group = |title: &str,
                  strips: Vec<(String, Option<Strip>)>,
                  head: Option<Option<bool>>,
-                 wide: bool| {
+                 wide: bool,
+                 level: Option<(LevelMeter, LevelMeter)>| {
         let names: Vec<String> = strips.iter().map(|(n, _)| n.clone()).collect();
         let mut c = Card::new(title, Vec::new()).rack(names.clone(), wide);
         c.parts.clear();
@@ -524,13 +539,16 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
         }
         c.then(Part::Draw(Draw {
             h: 0.0,
-            f: Box::new(move |p, env, r| strips_rack(p, env, r, &strips, &names, wide)),
+            f: Box::new(move |p, env, r| {
+                let level = level.as_ref().map(|(l, r)| (l, r, now));
+                strips_rack(p, env, r, &strips, &names, wide, level)
+            }),
         }))
     };
     vec![
-        group("Monitoring", mon, None, false),
-        group("Recording sources", rec, None, false),
-        group("Playback", master, Some(mix_muted), true),
+        group("Monitoring", mon, None, false, None),
+        group("Recording sources", rec, None, false, None),
+        group("Playback", master, Some(mix_muted), true, level),
         Card::new(
             "",
             vec![
@@ -567,8 +585,12 @@ fn mixer(m: &Model) -> Vec<Card<'static>> {
     ]
 }
 
+/// How tall the words on a strip without a level are, logical px.
+const NO_METER_H: f32 = 14.0;
+
 /// A group's channel strips (the mockup's `.strips`): name, meter and fader, reading, Mute. Left aligned, each as wide
-/// as the widest name needs on one line.
+/// as the widest name needs on one line. A `level` (left, right, the frame's time) is the live playback meter; without
+/// it the strip's tracks stay flat and say [`NO_METER`].
 fn strips_rack(
     p: &mut Painter,
     env: &mut Env,
@@ -576,6 +598,7 @@ fn strips_rack(
     strips: &[(String, Option<Strip>)],
     names: &[String],
     wide: bool,
+    level: Option<(&LevelMeter, &LevelMeter, Instant)>,
 ) {
     let pal = env.pal;
     let w = kit::strip_w(p, names, wide);
@@ -593,7 +616,8 @@ fn strips_rack(
             name,
             pal.text,
         );
-        // Meter (no source yet: empty) and fader, then the reading and Mute.
+        // Meter and fader, then the reading and Mute. The live level takes the place of the flat tracks; with no
+        // source they stay flat and say so under themselves.
         let btn_h = 24.0;
         let val_h = if wide { 24.0 } else { 18.0 };
         let fd = Rect::new(
@@ -605,25 +629,39 @@ fn strips_rack(
         let meter_w = 5.0;
         let fader_w = 28.0;
         let gap = 5.0;
-        let stereo = if wide { 2.0 } else { 1.0 };
-        let span_w = meter_w * stereo + gap * stereo + fader_w;
+        let stereo: usize = if wide { 2 } else { 1 };
+        let span_w = meter_w * stereo as f32 + gap * stereo as f32 + fader_w;
         let mut x = fd.x + (w - span_w) / 2.0;
-        for _ in 0..stereo as usize {
-            p.frame(
-                Rect::new(x, fd.y + 7.0, meter_w, fd.h - 14.0),
-                2.0,
-                pal.field,
-                pal.popup_line,
-            );
+        let meter_h = fd.h - 14.0 - if level.is_none() { NO_METER_H } else { 0.0 };
+        for i in 0..stereo {
+            let track = Rect::new(x, fd.y + 7.0, meter_w, meter_h);
+            match level {
+                Some((left, right, at)) => {
+                    let meter = if i == 0 { left } else { right };
+                    draw_meter(p, &pal, track, meter, at, true);
+                }
+                None => p.frame(track, 2.0, pal.field, pal.popup_line),
+            }
             x += meter_w + gap;
+        }
+        if level.is_none() {
+            p.text_center(
+                Face::Ui,
+                kit::SIZE_SMALL,
+                Rect::new(col.x, fd.bottom() - 7.0 - NO_METER_H, w, NO_METER_H),
+                NO_METER,
+                pal.faint,
+            );
         }
         let vol = st.and_then(|s| s.volume);
         let db = st.and_then(|s| s.db);
         let frac = env.glide(vol.map(|v| f32::from(v) / 100.0), false);
+        // The fader stops above the "no meter" line, so no groove runs through the words.
+        let fader_h = fd.h - if level.is_none() { NO_METER_H } else { 0.0 };
         vslider(
             p,
             &pal,
-            Rect::new(x, fd.y, fader_w, fd.h),
+            Rect::new(x, fd.y, fader_w, fader_h),
             frac,
             false,
             pal.popup,
@@ -1380,7 +1418,7 @@ mod tests {
         let m = Sample::Live.model();
         for page in Page::ALL {
             assert_eq!(
-                cards(page, &m, &Prefs::default()).is_empty(),
+                cards(page, &m, &Prefs::default(), &Meters::none(), Instant::now()).is_empty(),
                 page == Page::Chain,
                 "{page:?}"
             );

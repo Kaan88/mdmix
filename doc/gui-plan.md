@@ -382,6 +382,52 @@ the hex field's caret, the fade in — and the G6 in the new colour. The picker 
 still not read back, so the row shows "—" until something is set in the session, and a cancel with nothing known
 before the open keeps the picked colour, because there is none to put back.
 
+### G6 meters: Run / Not verified (2026-11-26, Windows, cargo 1.99.1)
+
+**Built:** the Mixer page's live playback level (device-side item 2, the playback part of step G6), from Windows'
+`IAudioMeterInformation`.
+
+- **The thread** (`rust/g6-gui/src/levels.rs`, named `g6-meter`) is the only place the meter is opened: it calls
+  `g6_osaudio::open_output_meter()`, which is the G6's own playback endpoint (the first active render endpoint whose
+  name matches "BlasterX G6"), not Windows' default render endpoint. It reads `GetChannelsPeakValues` — left and right
+  for a stereo endpoint, the one reading twice for a mono one — at 30 Hz (33 ms), and hands each reading to the window
+  through the winit proxy (`UserEvent::Levels(MeterEvent)`: `Opened`, `Peaks`, `Unavailable`). It is neither the HID
+  worker nor the UI thread, and the meter's COM pointers never leave it.
+- **When it runs:** `levels::should_run(page, visible)` (a pure function) is true only on the Mixer page of a window
+  that is there to see: after its first frame, not minimised, not occluded. A page switch and a minimise/restore start
+  or stop it (on Windows a minimise comes as a resize to 0 x 0; `Occluded` is handled too, though Windows does not
+  report it); `LevelsHandle` sends one command per change, and the thread is joined on exit. A failed open says
+  `Unavailable` and is retried every 2 s while the page stays open (the G6 may be plugged in).
+- **Frames:** `Meters::apply` feeds the toolkit's two `LevelMeter`s and reports whether the picture changes; a silent
+  reading once both are at rest changes nothing, so no frame is asked for. While they are moving, `Meters::next_wake`
+  (33 ms) joins the animator's deadline in the loop's `WaitUntil`. The thread keeps polling silence; the window sleeps.
+- **Drawing:** `mdshared_ui::meter::draw_meter` (upright) in the Playback strip's two 5 px tracks, so the peak hold and
+  zones are the toolkit's; `draw_stereo` is not used because the strip's tracks are 5 px wide with a 5 px gap rather
+  than the toolkit's split of one rectangle. Every other strip (Line In, External Mic, SPDIF In, Mic, What U Hear)
+  keeps its flat tracks with "no meter" under them for now, and so does Playback when the meter can't be opened: no
+  fake levels.
+- **`--shot` and tests:** no thread and no audio. The busy sample draws `Meters::busy(now)` — a held peak (0.8 and
+  0.6) 300 ms before `now` and a quieter level (0.45 and 0.3) at it, all fixed instants — so the shot is the same
+  every time and shows the hold line above the bar; the live and away samples have no source and say "no meter".
+- **Reduced motion** does not stop the meter: a level is data, not decoration. Its deadline is independent of the
+  animator's `Policy`.
+- **`g6-osaudio`** gained `OutputMeter::peaks()` (the endpoint's first two metering channels; a failed read gives
+  zeros). `peak()` is unchanged, so the CLI's music effect still reads what it did.
+
+**Run:** `cargo fmt --all --check`, `cargo clippy --release --workspace --all-targets -- -D warnings` and
+`cargo test --release --workspace` pass (93 tests in `g6-gui`, 138 in the workspace). `--shots` renders the same 58
+pictures; the busy Mixer shot shows a level with its held peak in the Playback strip, the live one shows "no meter" on
+every strip. New tests, none of which opens a device or starts the thread: the handle sends Start then Stop once per
+change; `should_run` is the Mixer page of a visible window only; readings through `Meters` then silence leave no
+deadline once at rest; the Mixer's picture changes only below the page's header when there is a source, and the
+caption's words are "no meter".
+
+**Not verified:** no level has ever been read from a real endpoint (the window was not run in this step), so the
+channel count and order, the meter following the G6's actual output, the 30 Hz pace in the window, the
+minimise/occlusion transitions and the join on exit are all unconfirmed. An unplugged endpoint's failed read reads as
+0, which shows a flat meter rather than "no meter". The look of the meter in the strip was judged from the offline
+shots only.
+
 ## Tests
 
 - **Protocol:** the vectors, as in `rust-port.md`.

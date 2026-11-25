@@ -277,6 +277,28 @@ impl Meter {
         // `!Send` because the interface pointer is).
         unsafe { self.meter.GetPeakValue() }.map_or(0.0, f64::from)
     }
+
+    /// The peak of each metering channel (0..1), left first. An endpoint that meters one channel gives that reading
+    /// for both; a failed read gives `[0.0, 0.0]`.
+    pub fn peaks(&self) -> [f64; 2] {
+        // SAFETY: COM calls on a pointer this struct owns, used only on the thread that created it (`Meter` is
+        // `!Send` because the interface pointer is). `values` is sized to the count the endpoint reported.
+        let channels = unsafe { self.meter.GetMeteringChannelCount() }
+            .map(|n| n.min(8) as usize)
+            .unwrap_or(0);
+        if channels == 0 {
+            return [0.0, 0.0];
+        }
+        let mut values = vec![0.0f32; channels];
+        if unsafe { self.meter.GetChannelsPeakValues(&mut values) }.is_err() {
+            return [0.0, 0.0];
+        }
+        if channels == 1 {
+            [f64::from(values[0]); 2]
+        } else {
+            [f64::from(values[0]), f64::from(values[1])]
+        }
+    }
 }
 
 pub fn open_meter() -> Option<Meter> {

@@ -830,6 +830,7 @@ mod tests {
     use crate::intent::rgb_val;
     use crate::intent::test_device::hex_reports;
     use crate::kit::{Hit, Why};
+    use crate::levels::Meters;
     use crate::model::Page;
     use crate::pick::{self, ColourPick, Press};
     use crate::prefs::Prefs;
@@ -842,6 +843,7 @@ mod tests {
         let prefs = Prefs::default();
         let mut bmp = Bitmap::new(1100, 2400);
         let mut gfx = Gfx::new();
+        let meters = Meters::none();
         let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
         let input = FrameIn {
             model: m,
@@ -857,6 +859,7 @@ mod tests {
             pressed: None,
             dragging: None,
             frosted: false,
+            meters: &meters,
         };
         draw_frame(&mut p, &input, None, fx)
     }

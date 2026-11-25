@@ -16,6 +16,7 @@ mod fx;
 mod icons;
 mod intent;
 mod kit;
+mod levels;
 mod model;
 mod pages;
 mod pick;

@@ -19,6 +19,7 @@ use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
 use crate::fx::Fx;
 use crate::intent::Setting;
 use crate::kit::Hit;
+use crate::levels::Meters;
 use crate::model::Page;
 use crate::pick::{self, ColourPick};
 use crate::prefs::{Prefs, Theme};
@@ -49,6 +50,14 @@ pub fn render(args: &ShotArgs) -> Bitmap {
     let mut form = args
         .dialog
         .map(|page| dialog::form_at(&prefs, &model, page));
+    // No audio runs in a shot. The busy sample shows the meter at fixed readings at fixed instants (a held peak and
+    // a quieter level), so the picture is the same every time; the live and away samples have no source and say
+    // "no meter", as the window does when the endpoint's meter can't be opened.
+    let now = Instant::now();
+    let meters = match args.sample {
+        Sample::Busy => Meters::busy(now),
+        Sample::Live | Sample::Away => Meters::none(),
+    };
     let input = FrameIn {
         model: &model,
         prefs: &prefs,
@@ -59,10 +68,11 @@ pub fn render(args: &ShotArgs) -> Bitmap {
         maximized: false,
         hover: None,
         pointer: None,
-        now: Instant::now(),
+        now,
         pressed: None,
         dragging: None,
         frosted: args.backdrop != Backdrop::Off,
+        meters: &meters,
     };
     let mut areas;
     {

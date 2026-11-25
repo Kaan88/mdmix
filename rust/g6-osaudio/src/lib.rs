@@ -304,6 +304,19 @@ impl OutputMeter {
             match self.0 {}
         }
     }
+
+    /// The peak of each metering channel, 0.0..=1.0, left first: the endpoint's first two channels, or its one mono
+    /// reading for both. A failed read (device gone) gives `[0.0, 0.0]`.
+    pub fn peaks(&self) -> [f64; 2] {
+        #[cfg(windows)]
+        {
+            self.0.peaks()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.0 {}
+        }
+    }
 }
 
 /// `open_output_meter`: `None` when there is no G6 playback endpoint or this platform has no meter. Call it on the

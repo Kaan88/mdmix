@@ -23,6 +23,7 @@ use crate::fx::Fx;
 use crate::icons;
 use crate::intent::Setting;
 use crate::kit::{self, Bind, Env, Hit, Hits, Tone, Why, chrome_pal};
+use crate::levels::Meters;
 use crate::model::{Conn, Model, Page};
 use crate::pages;
 use crate::prefs::Prefs;
@@ -73,6 +74,8 @@ pub struct FrameIn<'a> {
     pub dragging: Option<Setting>,
     /// Draw the window's own caption buttons (not in `--shot` of a bare page? always true today).
     pub frosted: bool,
+    /// The live playback meter's channels, or no source at all: the Mixer's strips draw a level, or [`levels::NO_METER`].
+    pub meters: &'a Meters,
 }
 
 /// What a frame learned while it was drawn.
@@ -663,7 +666,7 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
     let used = if page == Page::Chain {
         pages::draw_chain(p, env, Rect::new(x, y, w, 0.0))
     } else {
-        let cards = pages::cards(page, input.model, input.prefs);
+        let cards = pages::cards(page, input.model, input.prefs, input.meters, input.now);
         kit::flow(p, env, Rect::new(x, y, w, 0.0), &cards)
     };
     let content = (start + used + 24.0) - (view.y - input.scroll);
@@ -683,6 +686,7 @@ fn draw_main(p: &mut Painter, env: &mut Env, input: &FrameIn, main: Rect) -> (Re
 mod tests {
     use super::*;
     use crate::desk::Toast;
+    use crate::levels::NO_METER;
     use crate::sample::Sample;
     use mdshared_text::Bitmap;
     use mdshared_ui::gfx::Gfx;
@@ -705,6 +709,27 @@ mod tests {
         size: (f32, f32),
         scroll: f32,
     ) -> (Bitmap, FrameOut) {
+        render_meters(
+            page,
+            sample,
+            pal,
+            size,
+            scroll,
+            &Meters::none(),
+            Instant::now(),
+        )
+    }
+
+    /// A frame with a given meter state and clock, for the Mixer's strips.
+    fn render_meters(
+        page: Page,
+        sample: Sample,
+        pal: mdshared_ui::theme::Palette,
+        size: (f32, f32),
+        scroll: f32,
+        meters: &Meters,
+        now: Instant,
+    ) -> (Bitmap, FrameOut) {
         let model = sample.model();
         let prefs = Prefs::default();
         let mut bmp = Bitmap::new(size.0 as u32, size.1 as u32);
@@ -720,13 +745,64 @@ mod tests {
             maximized: false,
             hover: None,
             pointer: None,
-            now: Instant::now(),
+            now,
             pressed: None,
             dragging: None,
             frosted: false,
+            meters,
         };
         let out = draw_frame(&mut p, &input, None, &mut Fx::still());
         (bmp, out)
+    }
+
+    /// The Mixer's Playback strip draws a level with its held peak when there is a source, and a flat track that says
+    /// "no meter" when there is none: the rest of the page is the same picture.
+    #[test]
+    fn the_mixer_draws_a_level_only_when_there_is_a_meter() {
+        let now = Instant::now();
+        let live = Meters::busy(now);
+        let (with, _) = render_meters(
+            Page::Mixer,
+            Sample::Busy,
+            DARK,
+            (1100.0, 720.0),
+            0.0,
+            &live,
+            now,
+        );
+        let none = Meters::none();
+        let (without, _) = render_meters(
+            Page::Mixer,
+            Sample::Busy,
+            DARK,
+            (1100.0, 720.0),
+            0.0,
+            &none,
+            now,
+        );
+        let mut changed = 0;
+        let mut lowest = 0;
+        for (i, (a, b)) in with
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(without.pixels.as_chunks::<4>().0)
+            .enumerate()
+        {
+            if a != b {
+                changed += 1;
+                lowest = lowest.max(i / with.width as usize);
+            }
+        }
+        assert!(changed > 100, "{changed} pixels changed");
+        assert!(
+            changed < 6000,
+            "{changed} pixels changed: more than the meters"
+        );
+        assert!(lowest > 150, "a change at y {lowest} is above the strips");
+        // The words are the plan's, and only a strip without a source draws them.
+        assert_eq!(NO_METER, "no meter");
     }
 
     #[test]
@@ -822,6 +898,7 @@ mod tests {
         let mut bmp = Bitmap::new(1100, 720);
         let mut gfx = Gfx::new();
         let mut form = dialog.then(|| crate::dialog::form_at(&prefs, &model, 0));
+        let meters = Meters::none();
         let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
         let input = FrameIn {
             model: &model,
@@ -837,6 +914,7 @@ mod tests {
             pressed: None,
             dragging: None,
             frosted: false,
+            meters: &meters,
         };
         draw_frame(&mut p, &input, form.as_mut(), &mut Fx::still());
         bmp.pixels
@@ -925,6 +1003,7 @@ mod tests {
             self.clock.advance_ms(ms);
             let now = self.clock.now();
             self.fx.anim.begin_frame(now);
+            let meters = Meters::none();
             let input = FrameIn {
                 model: &self.model,
                 prefs: &self.prefs,
@@ -939,6 +1018,7 @@ mod tests {
                 pressed: None,
                 dragging: None,
                 frosted: false,
+                meters: &meters,
             };
             let mut p = Painter::new(&mut self.bmp, &mut self.gfx, 1.0);
             let out = draw_frame(&mut p, &input, None, &mut self.fx);

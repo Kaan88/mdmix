@@ -43,6 +43,7 @@ use crate::frame::{FrameIn, FrameOut, draw_frame, popup_area};
 use crate::fx::{Fx, TOAST_FOR};
 use crate::intent::{Setting, Val};
 use crate::kit::{Hit, Hits};
+use crate::levels::{self, LevelsHandle, MeterEvent, Meters};
 use crate::model::{Conn, Model, Page};
 use crate::pick::{self, ColourPick, Press};
 use crate::prefs::{self, Prefs, Theme};
@@ -83,6 +84,8 @@ pub enum UserEvent {
     Read(Box<ReadResult>),
     /// The system's wish for less motion may have changed (`platform::watch_motion_reduced`).
     Motion,
+    /// The live playback meter's thread: it opened the endpoint's meter, a reading, or no meter at all.
+    Levels(MeterEvent),
 }
 
 const WHEEL_LINE: f32 = 48.0;
@@ -102,14 +105,18 @@ pub fn run(page: Option<Page>) -> i32 {
     platform::watch_motion_reduced(move || {
         let _ = motion.send_event(UserEvent::Motion);
     });
+    let meter_proxy = proxy.clone();
     let worker = Worker::start(move |r| {
         let _ = proxy.send_event(UserEvent::Read(Box::new(r)));
     });
+    // The meter's own thread opens the endpoint's meter when the Mixer page needs it: never the HID worker, never the
+    // UI thread (see `g6_osaudio::OutputMeter`).
+    let levels = LevelsHandle::start(meter_proxy);
     let mut prefs = Prefs::load();
     if let Some(p) = page {
         prefs.page = p;
     }
-    let mut app = App::new(prefs, worker);
+    let mut app = App::new(prefs, worker, levels);
     // The first read starts at once, before the window exists: the window opens while it runs.
     app.ask_read(false);
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -150,6 +157,12 @@ struct App {
     desk: Desk,
     /// The slider in hand, which has the pointer until it is let go.
     capture: Option<Capture>,
+    /// The live playback meter's thread, and the ballistics of the two channels it feeds.
+    levels: LevelsHandle,
+    meters: Meters,
+    /// The window's state as the meter decides on it: a minimised or occluded window polls no level.
+    minimized: bool,
+    occluded: bool,
     /// Motion: the animator and what is kept while it leaves (the toasts' texts, the tooltip's last anchor, the closed
     /// dialog, an open dropdown).
     fx: Fx,
@@ -160,7 +173,7 @@ struct App {
 }
 
 impl App {
-    fn new(prefs: Prefs, worker: Worker) -> App {
+    fn new(prefs: Prefs, worker: Worker, levels: LevelsHandle) -> App {
         App {
             page: prefs.page,
             prefs,
@@ -187,6 +200,10 @@ impl App {
             dialog: None,
             desk: Desk::default(),
             capture: None,
+            levels,
+            meters: Meters::none(),
+            minimized: false,
+            occluded: false,
             fx: Fx::new(),
             clock: SystemClock,
             deadline: None,
@@ -468,6 +485,15 @@ impl App {
         }
     }
 
+    /// Starts or stops the live playback meter: it runs only while the Mixer page is shown and the window is there
+    /// for a person to see. Called on a page switch, a minimise/restore, an occlusion, and after each frame while the
+    /// window first appears; it sends nothing when the answer hasn't changed.
+    fn sync_meter(&mut self) {
+        let visible = self.window.is_some() && self.drawn_once && !self.minimized && !self.occluded;
+        self.levels
+            .set_wanted(levels::should_run(self.page, visible));
+    }
+
     fn set_page(&mut self, page: Page) {
         if page != self.page {
             // The bitmap still holds the old page: the transition keeps a picture of its area before the next frame
@@ -479,6 +505,7 @@ impl App {
             self.scroll.jump_to(0.0, content, view);
             self.prefs.page = page;
             self.prefs.save();
+            self.sync_meter();
         }
     }
 
@@ -527,6 +554,7 @@ impl App {
             pressed: self.pressed,
             dragging: self.capture.as_ref().map(|c| c.setting),
             frosted: self.frost.key().is_some(),
+            meters: &self.meters,
         };
         let mut p = Painter::new(&mut self.bmp, &mut self.gfx, self.scale);
         let out: FrameOut = draw_frame(&mut p, &input, self.dialog.as_mut(), &mut self.fx);
@@ -557,6 +585,8 @@ impl App {
         }
         // The toasts' own times and the tooltip's delay ride on the animator's deadline: one wake-up serves them all.
         self.deadline = self.fx.wake();
+        // The first frame makes the window visible, which is what the meter waits for.
+        self.sync_meter();
     }
 
     fn present(&mut self) {
@@ -859,6 +889,8 @@ impl App {
             }
         }
         self.prefs.save();
+        // The meter's thread is waited for: one poll interval at most, and the endpoint is let go before the window is.
+        self.levels.stop();
         event_loop.exit();
     }
 
@@ -1004,6 +1036,13 @@ impl ApplicationHandler<UserEvent> for App {
                 self.sync_motion();
                 self.redraw();
             }
+            // A silent reading once the meters are at rest changes nothing: the window stays asleep while the thread
+            // keeps polling (the plan: no fake levels, and no frames for a level that isn't moving).
+            UserEvent::Levels(e) => {
+                if self.meters.apply(e, Instant::now()) {
+                    self.redraw();
+                }
+            }
         }
     }
 
@@ -1015,8 +1054,15 @@ impl ApplicationHandler<UserEvent> for App {
                 self.size = (s.width, s.height);
                 if let Some(w) = &self.window {
                     self.maximized = w.is_maximized();
+                    self.minimized = w.is_minimized() == Some(true);
                 }
+                // A minimised window polls no level; a restored one starts again.
+                self.sync_meter();
                 self.redraw();
+            }
+            WindowEvent::Occluded(o) => {
+                self.occluded = o;
+                self.sync_meter();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale = scale_factor as f32;
@@ -1124,6 +1170,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.desk.due(),
             self.fx.toasts.deadline(),
             self.fx.tip.deadline(),
+            self.meters.next_wake(now, levels::POLL),
         ]
         .into_iter()
         .flatten()
