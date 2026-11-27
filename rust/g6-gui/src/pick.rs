@@ -124,7 +124,10 @@ impl ColourPick {
             let rel = x - (hex.x + 10.0);
             let stops = self.cache.hex_stops().to_vec();
             let field = self.picker.field_mut();
-            if clicks >= 2 {
+            // A double click takes the word under the pointer, a triple click (or more) the whole field.
+            if clicks >= 3 {
+                field.select_all();
+            } else if clicks == 2 {
                 field.select_word_at(rel, &stops);
             } else {
                 field.press(rel, &stops, shift);
@@ -195,5 +198,43 @@ pub fn on_close(sent: Option<Val>, now: Val, original: Option<Val>, accept: bool
         original
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mdshared_text::Bitmap;
+    use mdshared_ui::gfx::Gfx;
+    use mdshared_ui::theme::LIGHT;
+
+    /// A press in the hex field places the caret, a double click takes the word under it and a triple click the
+    /// whole field, as in any text box.
+    #[test]
+    fn a_triple_click_in_the_hex_field_selects_all_of_it() {
+        let mut pk = ColourPick::open(Rect::new(40.0, 80.0, 120.0, 28.0), [0x12, 0x34, 0x56], None);
+        pk.place(Rect::new(0.0, 36.0, 900.0, 700.0));
+        // A draw measures the field's caret stops.
+        let mut bmp = Bitmap::new(900, 740);
+        let mut gfx = Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        pk.draw(&mut p, &LIGHT, 1.0);
+        let hex = pk.layout().hex;
+        let (x, y) = (hex.x + 40.0, hex.cy());
+        assert_eq!(pk.picker.field().text(), "#123456");
+
+        assert_eq!(pk.press(x, y, false, 1), Press::Taken);
+        assert_eq!(pk.picker.focus(), Part::Hex);
+        assert_eq!(pk.picker.field().selected_text(), "");
+        pk.release();
+        pk.press(x, y, false, 2);
+        assert_eq!(pk.picker.field().selected_text(), "123456");
+        pk.release();
+        pk.press(x, y, false, 3);
+        assert_eq!(pk.picker.field().selected_text(), "#123456");
+        pk.release();
+        // A fourth press in the same run is still the whole field.
+        pk.press(x, y, false, 4);
+        assert_eq!(pk.picker.field().selected_text(), "#123456");
     }
 }
