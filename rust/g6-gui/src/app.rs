@@ -1114,10 +1114,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Focused(f) => {
                 self.focused = f;
                 // A slider held while the window loses the focus is let go there, and so is a colour marker: its
-                // last colour goes, and the picker stays open without one in hand.
+                // last colour goes, and the picker stays open without one in hand. A control pressed then is let go
+                // with no click: winit sends no release for a press the window lost, and the press left behind would
+                // act on a later release over the same control (one whose press hit nothing).
                 if !f {
                     self.let_go();
                     self.picker_release();
+                    self.pressed = None;
                 }
                 if f {
                     self.sync_motion();
